@@ -275,7 +275,11 @@ d_icd_diagnoses &lt;-<span class="st"> </span><span class="kw">get.table</span>(
 
 <span class="co"># DIAGNOSES_ICD</span>
 diagnoses_icd &lt;-<span class="st"> </span><span class="kw">get.table</span>(con, <span class="st">'DIAGNOSES_ICD'</span>)
-<span class="kw">save</span>(diagnoses_icd, <span class="dt">file=</span><span class="st">'./data/diagnoses_icd.RData'</span>)</code></pre></div>
+<span class="kw">save</span>(diagnoses_icd, <span class="dt">file=</span><span class="st">'./data/diagnoses_icd.RData'</span>)
+
+<span class="co"># ADMISSIONS</span>
+admissions &lt;-<span class="st"> </span><span class="kw">get.table</span>(con, <span class="st">'ADMISSIONS'</span>)
+<span class="kw">save</span>(diagnoses_icd, <span class="dt">file=</span><span class="st">'./data/admissions.RData'</span>)</code></pre></div>
 </div>
 
 

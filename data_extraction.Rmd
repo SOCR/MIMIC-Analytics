@@ -37,4 +37,8 @@ save(d_icd_diagnoses, file='./data/d_icd_diagnoses.RData')
 diagnoses_icd <- get.table(con, 'DIAGNOSES_ICD')
 save(diagnoses_icd, file='./data/diagnoses_icd.RData')
 
+# ADMISSIONS
+admissions <- get.table(con, 'ADMISSIONS')
+save(diagnoses_icd, file='./data/admissions.RData')
+
 ```
