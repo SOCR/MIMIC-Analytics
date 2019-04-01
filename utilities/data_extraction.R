@@ -28,3 +28,14 @@ open.connection <- function() {
   
   return (con)
 }
+
+###############################################################################
+#
+# GET.TABLE: a function to output a full SQL table. Use only with smaller
+# tables such as D_DIAGNOSES_ICD.
+#
+
+get.table <- function(con, table.name) {
+  return( dbGetQuery(con, sprintf("SELECT * FROM %s", table.name)) )
+}
+
