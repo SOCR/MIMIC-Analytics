@@ -1,0 +1,20 @@
+---
+title: "Redox & Metabolomics in a Porcine Model of Hemorrhagic Shock"
+author: "<h3>Brandon Cummings</h3>"
+date: "`r format(Sys.time(), '%B %Y')`"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: default
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+---
+
+**Import functionality**
+```{r message=F, warning=F}
+source('utilities/data_extraction_tools.R')
+```
