@@ -36,6 +36,23 @@ open.connection <- function() {
 #
 
 get.table <- function(con, table.name) {
-  return( dbGetQuery(con, sprintf("SELECT * FROM %s", table.name)) )
+  return( 
+    dbGetQuery(con, sprintf("SELECT * 
+                             FROM %s", table.name))
+  )
 }
 
+###############################################################################
+#
+# BUILD.COHORT: a function to extract subject and admission identifiers based
+# on a list of ICD9 diagnoses codes.
+#
+
+build.cohort <- function(con, icd9_codes) {
+  return( 
+    dbGetQuery(con, sprintf("SELECT *
+                             FROM DIAGNOSES_ICD
+                             WHERE icd9_code IN ('%s')",
+                             paste(as.character(icd9_codes), collapse="', '")))
+  )
+}
