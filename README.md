@@ -32,6 +32,11 @@ Resources
 * The [utilities directory](https://github.com/SOCR/MIMIC_Analytics/utilities) contains a set of R scripts used to access, process, and visualize data.
 * The [data_extraction.Rmd](https://github.com/SOCR/MIMIC-Analytics/blob/master/data_extraction.Rmd) and corresponding HTML file cover the data extraction from the dataset using utilties found in the [utilities directory](https://github.com/SOCR/MIMIC_Analytics/utilities).
 
+Contributing
+============
+
+Members of the SOCR organization who wish to contribute are encouraged to do so via branch and pull request. Proposed changes will be reviewed during weekly group meetings.
+
 Usage
 =====
 
