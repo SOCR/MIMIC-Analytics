@@ -28,10 +28,9 @@ The Medical Information Mart for Intensive Care ([MIMIC-III](https://mimic.physi
 Resources
 =========
 
-* All [data](https://github.com/SOCR/MIMIC_Analytics/tree/master/data) used in this study is openly and publicly available from [Physionet](https://mimic.physionet.org/). Access requires [registration and signing of an appropriate data use agreement](https://mimic.physionet.org/gettingstarted/access/).
-* The [code directory](https://github.com/SOCR/MIMIC_Analytics/tree/master/code) contains the complete collection of R scripts used to preprocess, model, visualize, interrogate and understand the data.
-* The [results](https://github.com/SOCR/MIMIC_Analytics/tree/master/results) folder includes some of the derived measures and result summaries.
-
+* All [data](https://github.com/SOCR/MIMIC_Analytics/data) used in this study is openly and publicly available from [Physionet](https://mimic.physionet.org/). Access requires [registration and signing of an appropriate data use agreement](https://mimic.physionet.org/gettingstarted/access/).
+* The [utilities directory](https://github.com/SOCR/MIMIC_Analytics/utilities) contains a set of R scripts used to access, process, and visualize data.
+* The [data_extraction.Rmd](https://github.com/SOCR/MIMIC-Analytics/blob/master/data_extraction.Rmd) and corresponding HTML file cover the data extraction from the dataset using utilties found in the [utilities directory](https://github.com/SOCR/MIMIC_Analytics/utilities).
 
 Usage
 =====
