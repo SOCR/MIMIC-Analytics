@@ -29,6 +29,7 @@
 *.m~
 __pycache__
 .Rhistory
+.httr-oauth
 
 # OS generated files #
 ######################

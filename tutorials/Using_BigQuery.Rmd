@@ -1,0 +1,104 @@
+---
+title: "Using Google BigQuery with MIMIC-III"
+author: "<h3>Brandon Cummings</h3>"
+date: "`r format(Sys.time(), '%B %Y')`"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: default
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+---
+
+*Libraries Used*
+```{r message=F, warning=F}
+library('bigrquery')     # Query data from Google BigQuery
+library('knitr')         # Make knited tables ("kables")
+library('kableExtra')    # Extra kable formatting options
+```
+
+# Introduction
+
+As a part of the [SOCR](http://www.socr.umich.edu) [MIMIC-III](https://github.com/SOCR/MIMIC-Analytics) project, data is queried using the [Google Cloud](https://cloud.google.com) platform. Specifically, the MIMIC-III dataset can be accessed via the [BigQuery](https://cloud.google.com/bigquery/) tool. Using this platform ensure that all team members have equal access to the dataset.
+
+To gain access to the Google BigQuery tool, it is assumed that team members already have a [Physionet](https://physionet.org) account and have access to the MIMIC-III database. If not, please see the ["Getting Started with MIMIC"](https://docs.google.com/document/d/1dF01isHIEuN5D96dg1_f_4wKy91RM9M8ijTVxld5qec/edit) tutorial on the Google Drive.
+
+Access to the BigQuery platform requires the following additional steps:
+
+1. Create a BigQuery project.  
+2. Test via `bigrquery` package.
+3. Apply for MIMIC-III Big Query access.
+4. Test access.
+
+# Create a BigQuery project
+
+First, log into the [BigQuery cloud console application](https://console.cloud.google.com/bigquery) using your University of Michigan (\@umich.edu) address. This should be associated with a Google Account (i.e. you should be able to access other Google services such as Google Drive). Read the Terms of Service and select them if you agree. This creates a free-tier Google Cloud account, which includes 10GB/month storage (which we won't use) and 1TB/month of processed query data (which we will). Since the entire dataset is ~55GB, I imagine this should be plenty for our purposes. Additional query data is available for $5 per TB. You get an initial $300 credit for being part of the university, should you choose this option. However, to recieve this benefit you do need to put in billing information. More pricing information is available [here](https://cloud.google.com/bigquery/pricing#free-tier).
+
+After an account has been made, select the "Create Project" button in the top banner. Select "New Project" and give it a name. Pay attention to the "Project ID" field located in gray directly below this text box, as this is how you will access the project. Assign the project to the `umich.edu` organization if that's not done for you.
+
+That's it on Google's end!
+
+# Test via `bigrquery` package
+
+One nice thing about Google BigQuery is that it can be queried from within `R` using the `bigrquery` package. The following test will show you how to form a basic query using publically-available data, and make sure that your account is configured properly. More documentation can be found [here](https://db.rstudio.com/databases/big-query/).
+
+First, install the `bigrquery` package:
+
+```{r eval=F}
+install.packages('bigrquery')
+```
+
+Specify your project name. This should be changed to reflect the project you made in the previous step.
+```{r message=F, warning=F}
+project <- 'testingtesting123' 
+```
+
+Formulate your SQL query:
+```{r message=F, warning=F}
+sql <- 'SELECT year, month, day, weight_pounds 
+        FROM [publicdata:samples.natality] 
+        LIMIT 5'
+
+data <- query_exec(sql, project=project)
+```
+
+If your authentication needs to be refreshed, the `query_exec` function may open a browser tab and prompt you to login to your Google account. Follow the prompts, and copy the authorization key from your browser to the R command line.
+
+After the query runs, it should return a dataframe similar to the one below:
+
+
+```{r message=F, warning=F}
+kable(data) %>% kable_styling(bootstrap_options = 'striped')
+```
+
+# 3. Apply for MIMIC-III Big Query access.
+
+Lastly, you need to apply to be added to the Physionet MIMIC-III BigQuery group. To do this, email [mimic-support@physionet.org](mailto://mimic-support@physionet.org) with the subject line "Google BigQuery Access". In the body of your email, say that you're hoping to access MIMIC-III via Google BigQuery, and that you already have Physionet credentials. Also give your @\umich email, and state that it's associated with a Google account.
+
+My request was answered directly by the creator of MIMIC and the first author of many of the papers we have been reading - this should probably go without saying, but please remember to be very polite and to thank them for their time.
+
+# Test access to MIMIC
+
+Once you recieve an email from the Physionet team, go ahead and make sure you can query the data.
+
+First, test the clinical data:
+```{r message=F, warning=F}
+project <- 'testingtesting123' # change this to your project
+sql <- 'SELECT * FROM [physionet-data.mimiciii_clinical.patients] LIMIT 5'
+data <- query_exec(sql, project=project)
+kable(data) %>% kable_styling(bootstrap_options = 'striped')
+```
+
+Also test the notes data:
+```{r message=F, warning=F}
+project <- 'testingtesting123' # change this to your project
+sql <- 'SELECT * FROM [physionet-data.mimiciii_notes.noteevents] LIMIT 1'
+data <- query_exec(sql, project=project)
+cat(substr(data$TEXT, 1, 1000))
+```
+
+If this works: congratulations! You can now query the MIMIC dataset via SQL queries!
