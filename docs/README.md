@@ -35,7 +35,7 @@ Resources
 Contributing
 ============
 
-Members of the SOCR organization who wish to contribute are encouraged to do so via branch and pull request. Proposed changes will be reviewed during weekly group meetings.
+Members of the SOCR organization who wish to contribute are encouraged to do so via branch and pull request. Proposed changes will be reviewed during weekly group meetings. See [CONTRIBUTING.md](https://github.com/SOCR/MIMIC-Analytics/blob/master/docs/CONTRIBUTING.md) for details.
 
 Usage
 =====
