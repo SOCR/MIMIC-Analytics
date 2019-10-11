@@ -1,0 +1,182 @@
+---
+title: "Function for Examining History of Diseases"
+author: "<h3>Yuzhe You vyou@umich.edu</h3>"
+date: "`r format(Sys.time(), '%B %Y')`"
+output:
+  html_document:
+  highlight: tango
+number_sections: yes
+theme: default
+toc: yes
+toc_depth: 2
+toc_float:
+  collapsed: no
+smooth_scroll: yes
+---
+
+*Libraries Used*
+```{r message=F, warning=F}
+library('bigrquery')     # Query data from Google BigQuery
+library('knitr')         # Make knited tables ("kables")
+library('kableExtra')    # Extra kable formatting options
+library('ggplot2')       # Plotting library
+library('ggpubr')        # More options for ggplot
+library('hash')          # Hash functionality
+project = 'steady-cascade-252421' # CHANGE THIS TO YOUR PROJECT ID
+```
+
+# Extract a list of admissions from the ADMISSIONS table
+```{r message=F, warning=F}
+sql <- "SELECT subject_id, hadm_id, admittime
+        FROM [physionet-data.mimiciii_clinical.admissions]
+        LIMIT 1000"
+admission_sample <- query_exec(sql, project=project)
+kable(admission_sample) %>% kable_styling(bootstrap_options = 'striped')
+```
+
+# A list of the icd9 codes for depression
+```{r message=F, warning=F}
+depression.icd9_codes <- c( 29021, 29013, 30112, 29621, 29682, 311, 2980, 29633, 29632, 29626, 29625, 29624, 29623, 29620, 29622, 3091, 29634, 29636, 29635, 29631, 29630 )
+```
+
+# Make a dictionary for the history of depression
+```{r message=F, warning=F}
+dictionary <- data.frame(hadm_id=integer(), history_depression=integer())
+```
+
+# Go through each admission in the table
+```{r message=F, warning=F}
+for (row in 1:nrow(admission_sample)) {
+  hadm_id <- admission_sample[row, "hadm_id"]
+  subject_id <- admission_sample[row, "subject_id"]
+  admit_time <- admission_sample[row, "admittime"]
+  
+  print('checkpoint 1')
+  
+  # Get all the admission of this sepcific patient prior to the current admission
+  patient.admissions <- query_exec(
+  sprintf( "SELECT *
+            FROM [physionet-data.mimiciii_clinical.admissions] 
+            WHERE subject_id == (%s)", 
+          paste(subject_id, collapse=", ")),
+  project=project, max_pages = Inf)
+  
+  print('checkpoint 2')
+  
+  # Go through each admission and remove rows that are after the current admission
+  patient.admissions_new <- patient.admissions
+  for (row_admission in 1:nrow(patient.admissions)) {
+    date1 <- patient.admissions[row_admission, "ADMITTIME"]
+    date_difference <- difftime(date1, admit_time, unit='days')
+    if (date_difference >= 0) {
+      patient.admissions_new <- patient.admissions_new[-row_admission,]
+    }
+  }
+  
+  print('checkpoint 3')
+  
+  if (nrow(patient.admissions_new)) {
+    # Get all the icd9 codes of all admissions
+    patient.icd9_all <- query_exec(
+    sprintf( "SELECT icd9_code
+            FROM [physionet-data.mimiciii_clinical.diagnoses_icd] 
+            WHERE hadm_id IN (%s) ", 
+          paste(patient.admissions_new$HADM_ID, collapse=", ")),
+    project=project, max_pages = Inf)
+  
+    print('checkpoint 4')
+  
+    # Check the number of diagnosis for depression
+    history_depression = 0
+    for (i in 1:length(depression.icd9_codes)) {
+      depression.present <- depression.icd9_codes[i] %in% patient.icd9_all$icd9_code
+      if (depression.present == TRUE) {
+        history_depression = history_depression + 1
+      }
+    }
+    
+  }
+  else {
+    history_depression = 0
+  }
+  
+  print('checkpoint 5')
+  
+  print('hadm_id:')
+  print(hadm_id)
+  print('history_depression:')
+  print(history_depression)
+  new_row <- c(hadm_id, history_depression)
+  dictionary <- rbind(dictionary, new_row)
+}
+```
+
+# The function
+```{r message=F, warning=F}
+history_function <- function(admission_sample, dictionary, depression.icd9_codes) {
+  for (row in 1:nrow(admission_sample)) {
+    hadm_id <- admission_sample[row, "hadm_id"]
+    subject_id <- admission_sample[row, "subject_id"]
+    admit_time <- admission_sample[row, "admittime"]
+  
+    #print('checkpoint 1')
+  
+    # Get all the admission of this sepcific patient prior to the current admission
+    patient.admissions <- query_exec(
+    sprintf( "SELECT *
+              FROM [physionet-data.mimiciii_clinical.admissions] 
+              WHERE subject_id == (%s)", 
+           paste(subject_id, collapse=", ")),
+    project=project, max_pages = Inf)
+  
+    #print('checkpoint 2')
+  
+    # Go through each admission and remove rows that are after the current admission
+    patient.admissions_new <- patient.admissions
+    for (row_admission in 1:nrow(patient.admissions)) {
+      date1 <- patient.admissions[row_admission, "ADMITTIME"]
+      date_difference <- difftime(date1, admit_time, unit='days')
+      if (date_difference >= 0) {
+        patient.admissions_new <- patient.admissions_new[-row_admission,]
+      }
+    }
+  
+    #print('checkpoint 3')
+  
+    if (nrow(patient.admissions_new)) {
+      # Get all the icd9 codes of all admissions
+      patient.icd9_all <- query_exec(
+      sprintf( "SELECT icd9_code
+              FROM [physionet-data.mimiciii_clinical.diagnoses_icd] 
+              WHERE hadm_id IN (%s) ", 
+            paste(patient.admissions_new$HADM_ID, collapse=", ")),
+      project=project, max_pages = Inf)
+  
+      #print('checkpoint 4')
+  
+      # Check the number of diagnosis for depression
+      history_depression = 0
+      for (i in 1:length(depression.icd9_codes)) {
+        depression.present <- depression.icd9_codes[i] %in% patient.icd9_all$icd9_code
+        if (depression.present == TRUE) {
+          history_depression = history_depression + 1
+        }
+      }
+    
+    }
+    else {
+      history_depression = 0
+    }
+  
+    #print('checkpoint 5')
+  
+    print('hadm_id:')
+    print(hadm_id)
+    print('history_depression:')
+    print(history_depression)
+    new_row <- c(hadm_id, history_depression)
+    dictionary <- rbind(dictionary, new_row)
+  }
+  return(dictionary)
+}
+```
