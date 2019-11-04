@@ -1,0 +1,139 @@
+---
+title: "MIMIC III: APACHE-HF Score Calculation"
+author: 
+- "<h3><p>Jessica Wild & Ziyuan Sun</p><p>jesswild@umich.edu ziyuans@umich.edu</p></h3>"
+date: "`r format(Sys.time(), '%B %Y')`"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: default
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+subtitle: <h2><u>Winter 2019, SOCR-MDP</u></h2>
+---
+
+**Libraries Used:**
+```{r message=F, warning=F}
+# Data I/O
+require('RPostgreSQL')    # access MIMIC-III
+require('reshape2')       # melting dataframes
+require('dplyr')          # misc. organization
+# Data imputation
+require('mi')
+# Plots and tables
+require('knitr')          # knitting Rmd to HTML; kable() function
+require('kableExtra')     # extra formating options for knitr tables
+require('ggplot2')        # 2d plotting
+```
+
+**Random Seed Set**
+```{r message=F, warning=F}
+set.seed(11042019)
+```
+
+# Load Raw Data
+
+Data needed to calculate APACHE scores was pulled directly from MIMIC and stores as a csv file. 
+
+```{r eval=T, message=F, warning=F}
+#age, hr, creatinine, hematocrit, gcs, potassium, sodium, dbp, sbp
+cohort_apache <- read.csv('Data_Apache.csv')
+kable(head(cohort_apache), caption="Sample of raw data") %>%
+  kable_styling(bootstrap_options='striped')
+```
+
+In total we have `r nrow(cohort_apache)` admission ID's within the cohort.
+
+# Impute Missing Values
+
+There is quite a bit of missingness present in the data set, more in some variables than others.  To allow us to calculate the  APACHE scores for all admission ID's we need to impute plausible estimates for these missing values
+
+```{r message=F, warning=F}
+cohort_apache_comp_missing <- as.data.frame(cohort_apache)
+imputations <-mi(cohort_apache_comp_missing, n.iter=5, n.chains=1, verbose=TRUE)
+cohort_apache_imputed <- complete(imputations, 1)
+
+cohort_apache_imputed <-cohort_apache_imputed [,1:11]
+
+kable(head(cohort_apache_imputed), caption="Sample of imputed data") %>%
+  kable_styling(bootstrap_options='striped')
+```
+
+# Calculate MAP from SBP & DBP
+
+Mean arterial pressure was not recorded often enough in MIMIC for us to directly pull enough data to ensure accurate imputation.  Instead, we pulled data on systolic and diasystolic blood pressure and calculated MAP with a function.
+
+```{r message=F, warning=F}
+# function to calculate map
+mean_arterial_pressure <- function(sbp,dbp){
+  return((sbp+2*dbp)/3)
+}
+
+cohort_apache_imputed = as.data.frame(cohort_apache_imputed)
+cohort_apache_imputed$map = mean_arterial_pressure(cohort_apache_imputed$sbp, cohort_apache_imputed$dbp)
+
+kable(head(cohort_apache_imputed$map), caption="Sample of calculated MAP") %>%
+  kable_styling(bootstrap_options='striped')
+```
+
+# Calculate APACHE-HF Scores 
+
+```{r message=F, warning=F}
+#calculate the APACHE-HF score after imputation:
+cohort_apache_imputed$APACHE_HF <- rep(x=0, times = nrow(cohort_apache_imputed))
+  #set up an empty vector to store each admission ID's score
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$map<=200, yes = 1, no = cohort_apache_imputed$APACHE_HF)
+  #map
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$hr<=110, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+  #hr
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$sodium<=137, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+  #sodium
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$potassium>=4.9, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+  #potassium
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$creatinine>=1.48, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+  #creatinine
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$hematocrit<=36.9, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+  #hematocrit
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$gcs<=13, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+  #gcs
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$age>=72, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+  #age
+APACHE_HF_imputed = cohort_apache_imputed$APACHE_HF
+
+kable(head(APACHE_HF_imputed), caption="Sample of calculated APACHE-HF Scores") %>%
+  kable_styling(bootstrap_options='striped')
+```
+
+#Data Visualization
+```{r message=F, warning=F}
+#Histograms of main variables
+  #age
+ggplot(data=cohort_apache_imputed, aes(cohort_apache_imputed$age)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #hr
+ggplot(data=cohort_apache_imputed, aes(cohort_apache_imputed$hr)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #creatinine
+ggplot(data=cohort_apache_imputed, aes(cohort_apache_imputed$creatinine)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #hematocrit
+ggplot(data=cohort_apache_imputed, aes(cohort_apache_imputed$hematocrit)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #gcs
+ggplot(data=cohort_apache_imputed, aes(cohort_apache_imputed$gcs)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #potassium
+ggplot(data=cohort_apache_imputed, aes(cohort_apache_imputed$potassium)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #sodium
+ggplot(data=cohort_apache_imputed, aes(cohort_apache_imputed$sodium)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #map
+ggplot(data=cohort_apache_imputed, aes(cohort_apache_imputed$map)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+#Pie Chart of APACHE Scores
+class = c('1','2','3','4','5','6','7','8')
+prop = c(sum(APACHE_HF_imputed==1),sum(APACHE_HF_imputed==2),sum(APACHE_HF_imputed==3),sum(APACHE_HF_imputed==4),sum(APACHE_HF_imputed==5),sum(APACHE_HF_imputed==6),sum(APACHE_HF_imputed==7),sum(APACHE_HF_imputed==8))
+prop = 100*prop/sum(prop)
+data = as.data.frame(cbind(prop,class))
+ggplot(, aes(x = "", y = prop, fill = class)) +
+  geom_bar(width = 1, stat = "identity", color = "white") +
+  coord_polar("y", start = 0)+
+  theme_void()
+```
