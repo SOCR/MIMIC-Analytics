@@ -22,7 +22,7 @@ library('kableExtra')    # Extra kable formatting options
 library('ggplot2')       # Plotting library
 library('ggpubr')        # More options for ggplot
 
-project = 'testingtesting123' # CHANGE THIS TO YOUR PROJECT ID
+project = 'socr-mdp-mimic-analytics' # CHANGE THIS TO YOUR PROJECT ID
 ```
 
 # Introduction
@@ -95,7 +95,7 @@ patients.tbl <- query_exec(
 cohort <- merge(cohort, patients.tbl, by='SUBJECT_ID')
 
 # Remove subjects with an in-hospital date of death
-cohort <- cohort[!is.na(cohort$DOD_HOSP), ]
+cohort <- cohort[is.na(cohort$DOD_HOSP), ]
 ```
 After removing subjects who did not survive to ICU discharge, we are left with `r length(unique(cohort$HADM_ID))` unique encounters representing `r length(unique(cohort$SUBJECT_ID))` individual subjects.
 
