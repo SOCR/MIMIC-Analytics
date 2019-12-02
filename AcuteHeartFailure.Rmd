@@ -22,7 +22,7 @@ library('kableExtra')    # Extra kable formatting options
 library('ggplot2')       # Plotting library
 library('ggpubr')        # More options for ggplot
 
-project = 'testingtesting123' # CHANGE THIS TO YOUR PROJECT ID
+project = 'socr-mdp-mimic-analytics' # CHANGE THIS TO YOUR PROJECT ID
 ```
 
 # Introduction
@@ -83,20 +83,21 @@ Based on this initial query, there are `r length(unique(cohort$HADM_ID))` unique
 As our target is predicting out-of-hospital mortality due to acute heart failure, we excude patients who expired in the hospital.
 
 ```{r message=F, warning=F}
-# Retrieve PATIENTS table
-patients.tbl <- query_exec(
-  sprintf( "SELECT SUBJECT_ID, GENDER, DOB, DOD, DOD_HOSP, DOD_SSN 
-            FROM [physionet-data.mimiciii_clinical.patients] 
-            WHERE subject_id IN (%s)", 
-          paste(cohort$SUBJECT_ID, collapse=", ")),
+# Retrieve ADMISSIONS table
+adm.tbl <- query_exec(
+  sprintf( "SELECT HADM_ID, DISCHTIME, DEATHTIME
+        FROM [physionet-data.mimiciii_clinical.admissions] 
+        WHERE hadm_id IN (%s)",
+      paste(cohort$HADM_ID, collapse=", ")),
   project=project, max_pages = Inf)
 
 # Merge with cohort object
-cohort <- merge(cohort, patients.tbl, by='SUBJECT_ID')
+cohort <- merge(cohort, adm.tbl, by="HADM_ID")
 
-# Remove subjects with an in-hospital date of death
-cohort <- cohort[!is.na(cohort$DOD_HOSP), ]
+# Remove subjects with in hospital date of death (aka they have a deathtime in admissions table)
+cohort <- cohort[is.na(cohort$DEATHTIME), ]
 ```
+
 After removing subjects who did not survive to ICU discharge, we are left with `r length(unique(cohort$HADM_ID))` unique encounters representing `r length(unique(cohort$SUBJECT_ID))` individual subjects.
 
 ## Criteria 3: Length of stay between 24-hours and 45 days
