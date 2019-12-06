@@ -21,16 +21,16 @@ library('knitr')         # Make knited tables ("kables")
 library('kableExtra')    # Extra kable formatting options
 library('ggplot2')       # Plotting library
 library('ggpubr')        # More options for ggplot
-# library("plyr")
 library("dplyr")
 
-project = 'mimic-alantran' # CHANGE THIS TO YOUR PROJECT ID
+# project = 'socr-mdp-mimic-analytics' # CHANGE THIS TO YOUR PROJECT ID
+project = 'mimic-alantran'
 ```
 
 # Load the cohort
 
 ```{r}
-cohort = read.csv("data/new_cohort.csv")
+cohort = read.csv("data/new_cohort.csv") %>% select(-X, -ROW_ID, -SEQ_NUM, -ICD9_CODE, -DEATHTIME, -DISCHTIME.y) %>% rename(DISCHTIME = DISCHTIME.x)
 ```
 
 The final cohort consists of `r nrow(cohort)` encounters.
@@ -67,7 +67,7 @@ get_values_from_ids = function(itemids, hadm_id=c(), table) {
 }
 
 get_values = function(label, table='chartevents', col_name = label, orig_col = "VALUE") {
-  return(get_values_from_ids(get_itemids(label), cohort$HADM_ID, table) %>% select(HADM_ID, !!orig_col) %>% rename(!!col_name := !!orig_col))
+  return(get_values_from_ids(get_itemids(label), cohort$HADM_ID, table) %>% select(HADM_ID, !!orig_col) %>% rename(!!col_name := !!orig_col)) %>% distinct(HADM_ID, .keep_all = TRUE)
 }
 ```
 
@@ -76,6 +76,10 @@ get_values = function(label, table='chartevents', col_name = label, orig_col = "
 ```{r}
 bnp = get_values("BNP", 'labevents', "BNP", "VALUE")
 bnp$BNP[bnp$BNP == "GREATER THAN 70000"] = 70000
+bnp$BNP[bnp$BNP == "GREATER THAN 70,000"] = 70000
+bnp$BNP[bnp$BNP == ">70000"] = 70000
+bnp$BNP[bnp$BNP == "DONE"] = 70000
+bnp$BNP = as.numeric(bnp$BNP)
 ```
 
 ## Diuretics
@@ -98,11 +102,38 @@ sql = sprintf('SELECT * FROM [physionet-data.mimiciii_clinical.procedures_icd]
               WHERE icd9_code IN (%s) AND hadm_id IN (%s)', 
               paste0(cpr_codes, collapse = ", "), 
               paste0(cohort$HADM_ID, collapse=", "))
-cpr = query_exec(sql, project=project, max_pages=1) %>% select(HADM_ID)
+cpr = query_exec(sql, project=project, max_pages=1) %>% distinct(HADM_ID)
 cpr$CPR = TRUE
 # print(kable(data) %>% kable_styling(bootstrap_options = 'striped'))
 ```
 ```{r}
-joined = left_join(cohort, bnp) %>% left_join(diuretic) %>% left_join(blocker) %>% left_join(cpr)
+bun_sodium = read.csv('data/DATA_MASTER.csv') %>% select(HADM_ID, BUN, SODIUM)
 ```
+
+
+```{r}
+joined = left_join(cohort, bnp) %>% left_join(diuretic) %>% left_join(blocker) %>% left_join(cpr) %>% left_join(bun_sodium)
+joined$DIURETIC[is.na(joined$DIURETIC)] = 0
+joined$BETABLOCKERS[is.na(joined$BETABLOCKERS)] = 0
+joined$CPR[is.na(joined$CPR)] = FALSE
+joined$BNP[is.na(joined$BNP)] = mean(bnp$BNP, na.rm = TRUE)
+joined$BUN[is.na(joined$BUN)] = mean(bun_sodium$BUN, na.rm = TRUE)
+joined$SODIUM[is.na(joined$SODIUM)] = mean(bun_sodium$SODIUM, na.rm = TRUE)
+```
+```{r}
+joined$ESCAPE_SCORE = 0
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$AGE > 70)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BUN > 40)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BUN > 90)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$SODIUM < 130)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$CPR) * 2
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$DIURETIC > 240)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BETABLOCKERS < 0.0001)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BNP > 500)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BNP > 1300) * 3
+write.csv(joined, 'data/ESCAPE_data.csv')
+```
+
+
+
 
