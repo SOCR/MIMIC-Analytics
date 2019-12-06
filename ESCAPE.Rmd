@@ -135,5 +135,11 @@ write.csv(joined, 'data/ESCAPE_data.csv')
 ```
 
 
+```{r}
+ggplot(data=joined, aes(ESCAPE_SCORE)) + geom_bar() + scale_x_continuous(breaks=seq(0, 10, 1))
+```
+
+
+
 
 
