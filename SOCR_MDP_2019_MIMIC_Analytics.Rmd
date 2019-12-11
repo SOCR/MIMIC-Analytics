@@ -675,25 +675,80 @@ for (i in 1:nrow(cohort)){
 
 # Pulling mortality after imputing rest of the data 
 ```{r eval=T, message=F, warning=F}
-#add mortality column 
-
-
+# Calculate days between date of discharge and date of death
+cohort_data$DISCH_to_DOD = difftime(cohort_data$DOD, cohort_data$DISCHTIME, units='days')
+# round up to nearest integer to represent day
+ceiling(cohort_data$DISCH_to_DOD)
 ```
 
 # Binning patients based on time until death outside of hospital
 ```{r eval=T, message=F, warning=F}
-# Death binning code
-# Emily has it and will add if we want it
-
-kable(head(cohort), caption="Sample of cohort data") %>%
-  kable_styling(bootstrap_options='striped')
+# Expired within 2 weeks of hospital discharge
+cohort_data$DOD_BIN <- ifelse(cohort_data$DISCH_to_DOD < 14, "14days", "") 
+# Expired between 2 weeks and 2 months
+cohort_data$DOD_BIN <- ifelse(cohort_data$DISCH_to_DOD > 13 & cohort_data$DISCH_to_DOD < 61, "60days", cohort_data$DOD_BIN)
+# Expired between 2 months and 1 year
+cohort_data$DOD_BIN <- ifelse(cohort_data$DISCH_to_DOD > 60 & cohort_data$DISCH_to_DOD < 366, "365days", cohort_data$DOD_BIN)
+# Expired between 1 year and 2 years
+cohort_data$DOD_BIN <- ifelse(cohort_data$DISCH_to_DOD > 365 & cohort_data$DISCH_to_DOD < 731, "730days", cohort_data$DOD_BIN)
+# Expired after 2 years
+cohort_data$DOD_BIN <- ifelse(cohort_data$DISCH_to_DOD > 730, "after_2years", cohort_data$DOD_BIN)
+# No DOD (presumed alive)
+cohort_data$DOD_BIN <- ifelse(is.na(cohort_data$DISCH_to_DOD), "no_dod", cohort_data$DOD_BIN)
 ```
 
-# Plots analyzing binned death for scores 
-analysis of different scores motives (optimize looking at 6-9 month mortality, ect)
+# Analyzing mean EFFECT scores by bin
 
 ```{r eval=T, message=F, warning=F}
-# plots of binned deaths!
+effect_mean <- aggregate(cohort_data$EFFECT, by=list(cohort_data$DOD_BIN), FUN=mean)
+names(effect_mean) <- c("DOD_BIN", "mean")
+effect_se <- ddply(data, c("DOD_BIN"), summarise,
+               N    = length(EFFECT),
+               mean = mean(EFFECT),
+               sd   = sd(EFFECT),
+               se   = sd / sqrt(N)
+)
+
+ggplot(effect_se, aes(x=DOD_BIN, y=mean)) + 
+    geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.1) +
+    geom_line() +
+    geom_point()
+```
+
+# Analyzing mean OPTIME scores by bin
+
+```{r eval=T, message=F, warning=F}
+optime_mean <- aggregate(data$OPTIME, by=list(data$DOD_BIN), FUN=mean)
+names(optime_mean) <- c("DOD_BIN", "mean")
+optime_se <- ddply(data, c("DOD_BIN"), summarise,
+               N    = length(OPTIME),
+               mean = mean(OPTIME),
+               sd   = sd(OPTIME),
+               se   = sd / sqrt(N)
+)
+
+ggplot(optime_se, aes(x=DOD_BIN, y=mean)) + 
+    geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.1) +
+    geom_line() +
+    geom_point()
+```
+
+# Analyzing mean OPTIMIZE scores by bin
+
+```{r eval=T, message=F, warning=F}
+optimize_mean <- aggregate(data$OPTIMIZE, by=list(data$DOD_BIN), FUN=mean)
+names(optimize_mean) <- c("DOD_BIN", "mean")
+optimize_se <- ddply(data, c("DOD_BIN"), summarise,
+               N    = length(OPTIMIZE),
+               mean = mean(OPTIMIZE),
+               sd   = sd(OPTIMIZE),
+               se   = sd / sqrt(N)
+)
+
+ggplot(optimize_se, aes(x=DOD_BIN, y=mean)) + 
+    geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.1) +
+    geom_line() +
+    geom_point()
 ```
 
 # Mortality as continuous variable plots and survival analysis
