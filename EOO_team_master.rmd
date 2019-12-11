@@ -50,9 +50,16 @@ Patients with CHF who died outside of the hospital.
 ```
 
 # Discussion of EFFECT, OPTIME, OPTIMIZE
-a little about the scores, including what they are predicting (like 6-9month mortality?) 
-table of how score calculated
-with references!
+
+## EFFECT Scoring System
+The Enhanced Feedback for Effective Cardiac Treatment (EFFECT) scoring system is a derivation and validation of a clinical model that aims to predict mortality among patients hospitalized for heart failure. The objective is to identify high-risk heart failure patients at hospital discharge, thus allowing more effective triage to management strategies. In order to apply the EFFECT scoring system on the MIMIC-III dataset, we retrieved the cohort patients' age, systolic blood pressure, elevated blood urea nitrogen level, sodium concentration, cerebrovascular disease, hepatic cirrhosis, history of cancer and hemoglobin level. {r} [(M. O'Connor 2010)] {https://www.sciencedirect.com/science/article/pii/S0735109709040595}
+
+## OPTIME Scoring System
+The Outcomes of a Prospective Trial of Intravenous Milrinone for Exacerbations of Chronic Heart Failure (OPTIME-CHF) trial aims to evaluate the treatment strategies in the care of population with acute exacerbations of chronic heart failure. The primary goal of this scoring system is a reduction in the total hospital days for cardiovascular events within 60 days after therapy. In order to apply the OPTIME-CHF scoring system on the MIMIC-III dataset, we retrieved the cohort patients' age, elevated blood urea nitrogen level and systolic blood pressure. {r} [(Duke Clinical Research Institue 2004)] {https://www.ncbi.nlm.nih.gov/pubmed/15599835}
+
+## OPTIMIZE Scoring System
+The Organized Program to Initiate Lifesaving Treatment in Hospitalized Patients with Heart Failure (OPTIMIZE-HF) is a comprehensive hospital-based registry and performance-improvement program designed to predict in-hospital mortality in patients hospitalized for heart failure. In order to apply the OPTIMIZE-HF scoring system on the MIMIC-III dataset, we retrieved the cohort patients' age, weight, systolic blood pressure, creatinine level, liver disease, history of depression and reactive airway disease. {r} [(Duke Clinical Research Institue 2008)] {https://www.ncbi.nlm.nih.gov/pubmed/18926148}
+
 
 ## Read in cohort
 ```{r}
