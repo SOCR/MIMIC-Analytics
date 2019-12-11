@@ -34,7 +34,7 @@ library('gtools')
 library("lubridate")
 
 
-project = 'wallems-mimic'
+project = 'mimic-iii-244018'
 ```
 
 # Inital Cohort
@@ -43,10 +43,10 @@ Patients with CHF who died outside of the hospital.
 ```{r eval=T, message=F, warning=F}
 # read in cohort from CSV (includes DOD)
 # also already includes SBP and Creatinine
-cohort_data <- read.csv(file="cohort_with_lab.csv", header = T)
+# cohort_data <- read.csv(file="cohort_with_lab.csv", header = T)
 
-kable(head(cohort_data), caption="Sample of cohort data") %>%
-  kable_styling(bootstrap_options='striped')
+# kable(head(cohort_data), caption="Sample of cohort data") %>%
+ # kable_styling(bootstrap_options='striped')
 ```
 
 # Discussion of EFFECT, OPTIME, OPTIMIZE
@@ -58,7 +58,148 @@ with references!
 each feature probs needs to be it's own box so that we can talk about how choose icds's and such
 i think. or talk about how choose each feature all together and then just stick queries and code in one block?
 
-# Liver Disease
+## Read in cohort
+```{r}
+cohort <- read.csv("new_cohort.csv")
+```
+
+## Extract itemcode 
+
+### BUN item codes
+```{r}
+sql = "SELECT ITEMID FROM [physionet-data.mimiciii_clinical.d_items] 
+        WHERE LABEL LIKE \"%BUN%\""
+bun.itemcodes = query_exec(sql, project=project)
+bun.itemcodes = bun.itemcodes$ITEMID
+```
+ 
+### Creatinine item code
+```{r}
+sql = "SELECT ITEMID FROM [physionet-data.mimiciii_clinical.d_items] 
+        WHERE LABEL LIKE \"%creatinine%\" OR LABEL LIKE \"%Creatinine%\" "
+creatinine.itemcodes = query_exec(sql, project=project)
+creatinine.itemcodes = creatinine.itemcodes$ITEMID
+```
+
+### Hemoglobin item codes
+```{r}
+sql = "SELECT ITEMID FROM [physionet-data.mimiciii_clinical.d_items] 
+        WHERE LABEL LIKE \"%hemoglobin%\" OR LABEL LIKE \"%Hemoglobin%\" "
+hemoglobin.itemcodes = query_exec(sql, project=project)
+hemoglobin.itemcodes = hemoglobin.itemcodes$ITEMID
+```
+
+### Sodium itemcodes
+```{r}
+sql = "SELECT ITEMID FROM [physionet-data.mimiciii_clinical.d_items] 
+        WHERE LABEL LIKE \"%sodium%\" OR LABEL LIKE \"%Sodium%\" "
+sodium.itemcodes = query_exec(sql, project=project)
+sodium.itemcodes = sodium.itemcodes$ITEMID
+```
+
+## Extract lab results
+
+This pull.last.event function is going to be used when extracting lab results
+```{r message=F, warning=F}
+pull.last.event <- function(hadm_id, itemcodes, return.fields, table, project, max_pages=Inf) {
+  sql <- sprintf("
+                 SELECT *
+                 FROM [physionet-data.mimiciii_clinical.%s] AS table1
+                 INNER JOIN (
+                   SELECT hadm_id, MAX(charttime), MAX(row_id)
+                   FROM [physionet-data.mimiciii_clinical.%s]
+                   WHERE itemid IN (%s)
+                   AND hadm_id IN (%s)
+                   GROUP BY hadm_id
+                 ) AS table2
+                 ON table1.row_id = table2.f1_",
+                 table, table, 
+                 paste(itemcodes, collapse=", "),
+                 paste(hadm_id, collapse=", ")
+  )
+  
+  data <- query_exec(sql, project=project, max_pages=max_pages)
+  colnames(data) <- gsub('table[0-9]_', '', colnames(data))
+  return(data[ , return.fields])
+}
+```
+
+### Systolic Blood Pressure
+
+```{r message=F, warning=F}
+sbp.itemcodes <- c( 6, 51, 442, 3313, 3315, 3317, 3321, 3323, 3325, 6701, 228152, 224167, 227243, 220050, 220179, 225309 )
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.sbp <- pull.last.event(cohort$HADM_ID, sbp.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.sbp)[2] = "SBP"
+```
+
+### BUN
+
+```{r}
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.bun <- pull.last.event(cohort$HADM_ID, bun.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.bun)[2] = "BUN"
+```
+
+### Creatinine
+
+```{r}
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.creatinine <- pull.last.event(cohort$HADM_ID, creatinine.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.creatinine)[2] = "Creatinine"
+```
+
+### Weight
+
+```{r}
+weight.itemcodes <- c(226531, 763)
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.weight <- pull.last.event(cohort$HADM_ID, weight.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.weight)[2] = "Weight"
+```
+
+### Sodium
+
+```{r}
+sodium.itemcodes <- c(220645)
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.sodium <- pull.last.event(cohort$HADM_ID, sodium.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.sodium)[2] = "Sodium"
+```
+
+### Hepatic Cirrhosis
+
+[5715 is the icd9 code for hepatic cirrhosis](http://www.icd9data.com/2012/Volume1/520-579/570-579/571/571.5.htm)
+
+```{r}
+sql <- "SELECT hadm_id
+        FROM [physionet-data.mimiciii_clinical.diagnoses_icd]
+        WHERE icd9_code = \"5715\" "
+
+cirr.cohort <- query_exec(sql, project=project)
+
+```
+## Combine the data
+
+```{r}
+cohort.with.lab <- left_join(cohort, data.sbp, by='HADM_ID') %>%
+                left_join(., data.creatinine, by='HADM_ID') %>%
+                left_join(., data.weight, by='HADM_ID') %>%
+                left_join(., data.sodium, by='HADM_ID')
+```
+
+```{r}
+cohort.with.lab$cirr = FALSE
+cohort.with.lab$cirr = cohort.with.lab$HADM_ID %in% cirr.cohort$hadm_id
+# write.csv(cohort.with.lab, "cohort_with_lab.csv")
+```
+
+## Liver Disease
 ```{r eval=T, message=F, warning=F}
 # History of Liver Disease
 sql_icd9_liver <- sprintf("
