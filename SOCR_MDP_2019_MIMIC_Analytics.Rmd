@@ -1379,6 +1379,7 @@ blocker = get_values("lol", "inputevents_mv", "BETABLOCKERS", "AMOUNT")
 ```
 
 ### CPR/Mechanical ventilation
+The CPR codes 9960, 9390, 967, 9670, 9671, and 9672 were used to find the patients in the cohort who received CPR or mechanical ventilation.
 
 ```{r}
 cpr_codes = c(9960, 9390, 967, 9670, 9671, 9672)
@@ -1388,23 +1389,19 @@ sql = sprintf('SELECT * FROM [physionet-data.mimiciii_clinical.procedures_icd]
               paste0(cohort$HADM_ID, collapse=", "))
 cpr = query_exec(sql, project=project, max_pages=1) %>% distinct(HADM_ID)
 cpr$CPR = TRUE
-# print(kable(data) %>% kable_styling(bootstrap_options = 'striped'))
-```
-```{r}
-bun_sodium = read.csv('data/DATA_MASTER.csv') %>% select(HADM_ID, BUN, SODIUM)
 ```
 
 ## Join all the separate data columns together
 The N/A values in the CPR column is imputed to `FALSE`, while the DIURETIC and BETABLOCKERS columns are imputed to 0. The BNP and BUN columns are imputed to the mean of the present data in the columns.
 
 ```{r}
-joined = left_join(cohort, bnp) %>% left_join(diuretic) %>% left_join(blocker) %>% left_join(cpr) %>% left_join(bun_sodium)
+joined = left_join(cohort, bnp) %>% left_join(diuretic) %>% left_join(blocker) %>% left_join(cpr) %>% left_join(data.bun) %>% left_join(data.sodium)
 joined$DIURETIC[is.na(joined$DIURETIC)] = 0
 joined$BETABLOCKERS[is.na(joined$BETABLOCKERS)] = 0
 joined$CPR[is.na(joined$CPR)] = FALSE
 joined$BNP[is.na(joined$BNP)] = mean(bnp$BNP, na.rm = TRUE)
-joined$BUN[is.na(joined$BUN)] = mean(bun_sodium$BUN, na.rm = TRUE)
-joined$SODIUM[is.na(joined$SODIUM)] = mean(bun_sodium$SODIUM, na.rm = TRUE)
+joined$BUN[is.na(joined$BUN)] = mean(data.bun$BUN, na.rm = TRUE)
+joined$Sodium[is.na(joined$Sodium)] = mean(data.sodium$Sodium, na.rm = TRUE)
 ```
 
 ## ESCAPE score calculation
@@ -1414,7 +1411,7 @@ joined$ESCAPE_SCORE = 0
 joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$AGE > 70)
 joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BUN > 40)
 joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BUN > 90)
-joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$SODIUM < 130)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$Sodium < 130)
 joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$CPR) * 2
 joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$DIURETIC > 240)
 joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BETABLOCKERS < 0.0001)
