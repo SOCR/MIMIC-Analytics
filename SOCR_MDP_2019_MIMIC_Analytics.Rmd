@@ -94,24 +94,23 @@ cohort <- query_exec(sql, project=project)
 Based on this initial query, there are `r length(unique(cohort$HADM_ID))` unique encounters in our cohort representing `r length(unique(cohort$SUBJECT_ID))` individual subjects.
 
 ## Criteria 2: Subject survived to ICU discharge
-
 As our target is predicting out-of-hospital mortality due to acute heart failure, we excude patients who expired in the hospital.
-
 ```{r message=F, warning=F}
-# Retrieve PATIENTS table
-patients.tbl <- query_exec(
-  sprintf( "SELECT SUBJECT_ID, GENDER, DOB, DOD, DOD_HOSP, DOD_SSN 
-            FROM [physionet-data.mimiciii_clinical.patients] 
-            WHERE subject_id IN (%s)", 
-          paste(cohort$SUBJECT_ID, collapse=", ")),
+# Retrieve ADMISSIONS table
+adm.tbl <- query_exec(
+  sprintf( "SELECT HADM_ID, DISCHTIME, DEATHTIME
+        FROM [physionet-data.mimiciii_clinical.admissions] 
+        WHERE hadm_id IN (%s)",
+      paste(cohort$HADM_ID, collapse=", ")),
   project=project, max_pages = Inf)
 
 # Merge with cohort object
-cohort <- merge(cohort, patients.tbl, by='SUBJECT_ID')
+cohort <- merge(cohort, adm.tbl, by="HADM_ID")
 
-# Remove subjects with an in-hospital date of death
-cohort <- cohort[is.na(cohort$DOD_HOSP), ]
+# Remove subjects with in hospital date of death
+cohort <- cohort[is.na(cohort$DEATHTIME), ]
 ```
+
 After removing subjects who did not survive to ICU discharge, we are left with `r length(unique(cohort$HADM_ID))` unique encounters representing `r length(unique(cohort$SUBJECT_ID))` individual subjects.
 
 ## Criteria 3: Length of stay between 24-hours and 45 days
@@ -143,13 +142,9 @@ cohort <- cohort[cohort$LOS > 1 & cohort$LOS <= 45, ]
 
 After removing subjects who did not survive to ICU discharge, we are left with `r length(unique(cohort$HADM_ID))` unique encounters representing `r length(unique(cohort$SUBJECT_ID))` individual subjects.
 
-## Criteria 4: Patients 18 years or older 
-
-To select patients 18 or older, first we join the patients table and the admissions table to get the admissions ID and the date of birth. DOB is the date of birth of the given patient. All dates in the database have been shifted to protect patient confidentiality. Dates are internally consistent for the same patient, but randomly distributed in the future. Dates of birth which occur in the present time are not true dates of birth. Furthermore, dates of birth which occur before the year 1900 occur if the patient is older than 89. In these cases, the patient's age at their first admission has been fixed to 300 to obscure their age and comply with HIPAA. The shift process was as follows: the patient's age at their first admission was determined. The date of birth was then set to exactly 300 years before their first admission. Therefore, we also extract the first admission time so we can calculate the age of the patient at the time of first admission. Finally, we exclude those younger than 18 at the time of first admission.
-
 ```{r message=F, warning=F}
 sql <- sprintf(
-       "SELECT *
+       "SELECT admissions.HADM_ID as admissions_HADM_ID, admissions.ADMITTIME as admissions_ADMITTIME, patients.DOD as DOD, patients.DOD_HOSP as DOD_HOSP, patients.DOD_SSN as DOD_SSN, patients.DOB as patients_DOB
         FROM [physionet-data.mimiciii_clinical.admissions] AS admissions
         JOIN [physionet-data.mimiciii_clinical.patients] AS patients
         ON admissions.subject_id = patients.subject_id
@@ -159,8 +154,8 @@ sql <- sprintf(
 age.tbl <- query_exec(sql, project=project)
 age.tbl$age <- difftime(age.tbl$admissions_ADMITTIME, age.tbl$patients_DOB, units='days')
 
-age.tbl <- data.frame(age.tbl[, c('admissions_HADM_ID', 'age')])
-colnames(age.tbl) <- c('HADM_ID', 'AGE')
+age.tbl <- data.frame(age.tbl[, c('admissions_HADM_ID', 'age', 'DOD', 'DOD_HOSP', 'DOD_SSN')])
+colnames(age.tbl) <- c('HADM_ID', 'AGE', 'DOD', 'DOD_HOSP', 'DOD_SSN')
 cohort <- merge(cohort, age.tbl, by="HADM_ID")
 cohort$AGE <- as.numeric(cohort$AGE) / 365
 
@@ -752,8 +747,43 @@ ggplot(optimize_se, aes(x=DOD_BIN, y=mean)) +
 ```
 
 # Mortality as continuous variable plots and survival analysis
-add references to dinov's tutorial
+The survival analysis code was referenced from the Scientific Methods for Health Sciences book: [SMHS SurvivalAnalysis](http://wiki.socr.umich.edu/index.php/SMHS_SurvivalAnalysis)
 
+## EFFECT
+```{r eval=T, message=F, warning=F}
+EFFECT = cohort$mortality
+length(EFFECT)
+
+# Below is the process of survival analysis
+
+# We need to determine the mortatility status first
+# status 0 = alive, 1 = dead in hospital
+cohort$status <- rep(x=0, times = nrow(cohort))
+cohort$status <- ifelse(cohort$mortality>0,yes=cohort$status, no=cohort$status+1)
+pd_surv_fit <- survfit(Surv(EFFECT,status)~1, data=cohort)
+plot(pd_surv_fit, xlab="EFFECT-HF score", ylab="Survival Probability")
+
+summary(pd_surv_fit)
+```
+
+## OPTIME
+```{r eval=T, message=F, warning=F}
+OPTIME = cohort$mortality
+length(OPTIME)
+
+# Below is the process of survival analysis
+
+# We need to determine the mortatility status first
+# status 0 = alive, 1 = dead in hospital
+cohort$status <- rep(x=0, times = nrow(cohort))
+cohort$status <- ifelse(cohort$mortality>0,yes=cohort$status, no=cohort$status+1)
+pd_surv_fit <- survfit(Surv(OPTIME,status)~1, data=cohort)
+plot(pd_surv_fit, xlab="OPTIME-CHF score", ylab="Survival Probability")
+
+summary(pd_surv_fit)
+```
+
+## OPTIMIZE
 ```{r eval=T, message=F, warning=F}
 OPTIMIZE = cohort$mortality
 length(OPTIMIZE)
@@ -768,6 +798,5 @@ pd_surv_fit <- survfit(Surv(OPTIMIZE,status)~1, data=cohort)
 plot(pd_surv_fit, xlab="OPTIMIZE-HF score", ylab="Survival Probability")
 
 summary(pd_surv_fit)
-
 ```
 
