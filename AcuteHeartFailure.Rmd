@@ -125,6 +125,7 @@ print(fig)
 
 # Remove encounters where LOS falls outside bounds
 cohort <- cohort[cohort$LOS > 1 & cohort$LOS <= 45, ]
+cohorttemp <- cohort
 ```
 
 After removing subjects who did not survive to ICU discharge, we are left with `r length(unique(cohort$HADM_ID))` unique encounters representing `r length(unique(cohort$SUBJECT_ID))` individual subjects.
@@ -135,7 +136,7 @@ To select patients 18 or older, first we join the patients table and the admissi
 
 ```{r message=F, warning=F}
 sql <- sprintf(
-       "SELECT *
+       "SELECT admissions.HADM_ID as admissions_HADM_ID, admissions.ADMITTIME as admissions_ADMITTIME, patients.DOD as DOD, patients.DOD_HOSP as DOD_HOSP, patients.DOD_SSN as DOD_SSN, patients.DOB as patients_DOB
         FROM [physionet-data.mimiciii_clinical.admissions] AS admissions
         JOIN [physionet-data.mimiciii_clinical.patients] AS patients
         ON admissions.subject_id = patients.subject_id
@@ -145,8 +146,8 @@ sql <- sprintf(
 age.tbl <- query_exec(sql, project=project)
 age.tbl$age <- difftime(age.tbl$admissions_ADMITTIME, age.tbl$patients_DOB, units='days')
 
-age.tbl <- data.frame(age.tbl[, c('admissions_HADM_ID', 'age')])
-colnames(age.tbl) <- c('HADM_ID', 'AGE')
+age.tbl <- data.frame(age.tbl[, c('admissions_HADM_ID', 'age', 'DOD', 'DOD_HOSP', 'DOD_SSN')])
+colnames(age.tbl) <- c('HADM_ID', 'AGE', 'DOD', 'DOD_HOSP', 'DOD_SSN')
 cohort <- merge(cohort, age.tbl, by="HADM_ID")
 cohort$AGE <- as.numeric(cohort$AGE) / 365
 
