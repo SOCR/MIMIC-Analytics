@@ -799,4 +799,518 @@ plot(pd_surv_fit, xlab="OPTIMIZE-HF score", ylab="Survival Probability")
 
 summary(pd_surv_fit)
 ```
+#Data Extraction
+##Packages and Loading Dataset
+Libraries used:
+```{r message=F, warning=F}
+#Data extraction
+require(bigrquery)
+# Data I/O
+require('RPostgreSQL')    # access MIMIC-III
+require('reshape2')       # melting dataframes
+require('dplyr')          # misc. organization
+# Data imputation
+require('mi')
+# Plots and tables
+require('knitr')          # knitting Rmd to HTML; kable() function
+require('kableExtra')     # extra formating options for knitr tables
+require('ggplot2')        # 2d plotting
+#Survival analysis
+require(survival)
+require(survminer)
+```
+Loading raw data:
+```{r eval=T, message=F, warning=F}
+#cohort <- read.csv('MIMIC_FinalCohort.csv')
+cohort <- read.csv('newcohort_with_dod.csv')
+kable(head(cohort), caption="Sample of raw cohort data") %>%
+  kable_styling(bootstrap_options='striped')
+cohort_apache <- read.csv('MIMIC_APACHE_data.csv')
+kable(head(cohort_apache), caption="Sample of raw APACHE data") %>%
+  kable_styling(bootstrap_options='striped')
+```
+##Data Pulling
+The function used to pull data based on a given set of item IDs is:
+
+```{r message=F, warning=F}
+pull.last.event <- function(hadm_id, itemcodes, return.fields, table, project, max_pages=Inf) {
+  sql <- sprintf("
+                 SELECT *
+                 FROM [physionet-data.mimiciii_clinical.%s] AS table1
+                 INNER JOIN (
+                 SELECT hadm_id, MAX(charttime), MAX(row_id)
+                 FROM [physionet-data.mimiciii_clinical.%s]
+                 WHERE itemid IN (%s)
+                 AND hadm_id IN (%s)
+                 GROUP BY hadm_id
+                 ) AS table2
+                 ON table1.row_id = table2.f1_",
+                 table, table, 
+                 paste(itemcodes, collapse=", "),
+                 paste(hadm_id, collapse=", ")
+  )
+  
+  data <- query_exec(sql, project=project, max_pages=max_pages)
+  colnames(data) <- gsub('table[0-9]_', '', colnames(data))
+  return(data[ , return.fields])
+}
+```
+
+This function was copied from previous work available on the MIMIC-III SOCR github.
+
+The process for determining what item IDs to use was primarily based on the information available from the d_items table within MIMIC, which lists a description of each item ID included in the data set.  We searched through the available item IDs to find those most similar to the selected features. The code used to query the d_items table was:
+```{r message=F, warning=F}
+#Finding itemid (left commented)
+#project <- project # change this to your project
+#sql <- "SELECT * FROM [physionet-data.mimiciii_clinical.d_items] WHERE LABEL LIKE '%Hematocrit%'"    #<---- change the variable name if you want find other related itemid
+#data <- query_exec(sql, project=project)
+#kable(data) %>% kable_styling(bootstrap_options = 'striped')
+```
+The item IDs used for each feature were:
+
+age: Age data was already included as part of the cohort (for details see the cohort selection document on the MIMIC-III github)
+
+heart rate: (211, 220045)
+
+creatinine: (50912)
+
+hematocrit: (50810, 51221)
+
+Glasgo comma score: (198)
+
+potassium: (227464,44711, 46223, 1535, 41956, 220640, 226535, 3792, 829, 227442)
+
+sodium: (220645, 1536, 3803, 837, 228389, 226534, 228390)
+
+systolic blood pressure: (6, 51, 442, 445, 480, 482, 484, 492, 3313, 3315, 3317, 3321, 3323, 3325, 6701, 228152, 224167, 227243, 220050, 220179, 225309, 220059, 226850, 226852, 220179)
+
+diastolic blood pressure: (8364,8368,8440,8503,8504,8505,8506,8441,8444,8445,8446,8448,8502,8507,8508,8555,228151,220060,226851,226853,227242,224643,220051,220180,225310)
+
+For certain features, most notably SBP and DBP, we found a large degree of missingness in the data, and so included more item IDs to try to minimize missingness. 
+
+The code used to pull and combine the data data was:
+```{r}
+#####Data for other scoring systems: cv disease, COPD, dementia
+#pulling data for cerebrovascular disease:
+
+sql <- "SELECT *
+    FROM [physionet-data.mimiciii_clinical.diagnoses_icd]
+    WHERE icd9_code IN ('430', '431', '4320', '4321', '4329', '43300', '43301', '43310', '43311', '43320', '43321', '43330', '43331', '43380', '43381', '43390', '43391', '43400', '43401', '43410', '43411', '43490', '43491', '4350', '4351', '4352', '4353', '4358', '4359', '436', '4370', '4371', '4372', '4373', '4374', '4375', '4376', '4377', '4378', '4379', '4380', '43810', '43811', '43812', '43813', '43814', '43819', '43820', '43821', '43822', '43830', '43831', '43832', '43840', '43841', '43842', '43850', '43851', '43852', '43853', '4386', '4387', '43881', '43882', '43883', '43884', '43885', '43889', '4389', '436', '4371', '4378', '4379', '4380', '4386', '4387', '4389', '43810', '43811', '43812', '43813', '43814', '43819', '43820', '43821', '43822', '43830', '43831', '43832', '43840', '43841', '43842', '43850', '43851', '43852', '43853', '43881', '43882', '43883', '43884', '43885', '43889', '67400', '67401', '67402', '67403', '67404', '74781', '99702')"
+cerebrovas <- query_exec(sql, project=project)
+cohort_cerebrovas <- merge(cohort, cerebrovas, by='HADM_ID')
+cohort$CV_Disease <- ifelse(cohort$HADM_ID %in% cohort_cerebrovas$HADM_ID, 1, 0)
+
+#pulling data for dementia:
+
+sql <- "SELECT *
+    FROM [physionet-data.mimiciii_clinical.diagnoses_icd]
+WHERE icd9_code IN ('2900', '29010', '29011', '29012', '29013', '29020', '29021', '2903', '29040', '29041', '29042', '29043', '2908', '2909', '2903', '2912', '29010', '29011', '29012', '29013', '29020', '29021', '29040', '29041', '29042', '29043', '29282', '29410', '29411', '29420', '29421', '33119', '33182')"
+dementia <- query_exec(sql, project=project)
+cohort_dementia <- merge(cohort, dementia, by='HADM_ID')
+cohort$Dementia <- ifelse(cohort$HADM_ID %in% cohort_dementia$HADM_ID, 1, 0)
+
+#pulling data for copd:
+
+sql <- "SELECT *
+    FROM [physionet-data.mimiciii_clinical.diagnoses_icd]
+WHERE icd9_code IN ('490', '4910', '4911', '49120', '49121', '49122', '4918', '4919', '4920', '4928', '49300', '49301', '49301', '49310', '49311', '49312', '49320', '49321', '49322', '49381', '49382', '49390', '49391', '49392', '4940', '4941', '4950', '4951', '4952', '4953', '4954', '4955', '4956', '4957', '4958', '4959', '496')"
+COPD <- query_exec(sql, project=project)
+cohort_COPD <- merge(cohort, COPD, by='HADM_ID')
+cohort$COPD <- ifelse(cohort$HADM_ID %in% cohort_COPD$HADM_ID, 1, 0)
+
+#####APACHE specific data
+
+#pull heart rate data
+hr.itemcodes <- c(211, 220045)
+return.fields <- c('SUBJECT_ID', 'HADM_ID', 'ITEMID', 'CHARTTIME', 'VALUENUM', 'VALUEUOM')
+data_hr <- pull.last.event(cohort$HADM_ID, hr.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+#pull creatinine
+creatinine.itemcodes <- c(50912)
+return.fields <- c('SUBJECT_ID', 'HADM_ID', 'ITEMID', 'CHARTTIME', 'VALUENUM', 'VALUEUOM')
+data_creatinine <- pull.last.event(cohort$HADM_ID, creatinine.itemcodes, return.fields, 'labevents', project, max_pages=1)
+
+#pull hematocrit data
+hematocrit.itemcodes <- c(50810, 51221)
+return.fields <- c('SUBJECT_ID', 'HADM_ID', 'ITEMID', 'CHARTTIME', 'VALUENUM', 'VALUEUOM')
+data_hematocrit <- pull.last.event(cohort$HADM_ID, hematocrit.itemcodes, return.fields, 'labevents', project, max_pages=1)
+
+# pull GCS data
+gcs.itemcodes <- c(198)
+return.fields <- c('SUBJECT_ID', 'HADM_ID', 'ITEMID', 'CHARTTIME', 'VALUENUM', 'VALUEUOM')
+data_GCS <- pull.last.event(cohort$HADM_ID, gcs.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+# pull potassium data
+potassium.itemcodes <- c(227464,44711, 46223, 1535, 41956, 220640, 226535, 3792, 829, 227442)
+return.fields <- c('SUBJECT_ID', 'HADM_ID', 'ITEMID', 'CHARTTIME', 'VALUENUM', 'VALUEUOM')
+data_potassium <- pull.last.event(cohort$HADM_ID, potassium.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+#pull sodium data
+sodium.itemcodes <- c(220645, 1536, 3803, 837, 228389, 226534, 228390)
+return.fields <- c('SUBJECT_ID', 'HADM_ID', 'ITEMID', 'CHARTTIME', 'VALUENUM', 'VALUEUOM')
+data_sodium <- pull.last.event(cohort$HADM_ID, sodium.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+
+#pull dbp data
+dbp.itemcodes <- c(8364,8368,8440,8503,8504,8505,8506,8441,8444,8445,8446,8448,8502,8507,8508,8555,228151,220060,226851,226853,227242,224643,220051,220180,225310)
+return.fields <- c('SUBJECT_ID', 'HADM_ID', 'ITEMID', 'CHARTTIME', 'VALUENUM', 'VALUEUOM')
+data_dbp <- pull.last.event(cohort$HADM_ID, dbp.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+#pull sbp data
+sbp.itemcodes <- c(6, 51, 442, 445, 480, 482, 484, 492, 3313, 3315, 3317, 3321, 3323, 3325, 6701, 228152, 224167, 227243, 220050, 220179, 225309, 220059, 226850, 226852, 220179)
+return.fields <- c('SUBJECT_ID', 'HADM_ID', 'ITEMID', 'CHARTTIME', 'VALUENUM', 'VALUEUOM')
+data_sbp <- pull.last.event(cohort$HADM_ID, sbp.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+
+#join together new data
+data_hr$HR <- data_hr$VALUENUM
+data_creatinine$creatinine <- data_creatinine$VALUENUM
+data_hematocrit$hematocrit <- data_hematocrit$VALUENUM
+data_GCS$gcs <- data_GCS$VALUENUM
+data_potassium$potassium <- data_potassium$VALUENUM
+data_sodium$sodium <- data_sodium$VALUENUM
+data_dbp$dbp <- data_dbp$VALUENUM
+data_sbp$sbp <- data_sbp$VALUENUM
+
+D=c()
+D$HADM_ID <- cohort$HADM_ID
+Dhr <- data_hr %>% select(HADM_ID, HR)
+D1 <- left_join(as.data.frame(D), as.data.frame(Dhr), by = "HADM_ID")
+
+Dcreatinine <- data_creatinine %>% select(HADM_ID, creatinine)
+D2 <- left_join(as.data.frame(D1), as.data.frame(Dcreatinine), by = "HADM_ID")
+
+Dhematocrit <- data_hematocrit %>% select(HADM_ID, hematocrit)
+D3 <- left_join(as.data.frame(D2), as.data.frame(Dhematocrit), by = "HADM_ID")
+
+Dgcs <- data_GCS %>% select(HADM_ID, gcs)
+D4 <- left_join(as.data.frame(D3), as.data.frame(Dgcs), by = 'HADM_ID')
+
+Dpotasium <- data_potassium %>% select(HADM_ID, potassium)
+D5 <- left_join(as.data.frame(D4), as.data.frame(Dpotasium), by = 'HADM_ID')
+
+Dsodium <- data_sodium  %>% select(HADM_ID, sodium)
+D6 <- left_join(as.data.frame(D5), as.data.frame(Dsodium), by = 'HADM_ID')
+
+Ddbp <- data_dbp  %>% select(HADM_ID, dbp)
+D7 <- left_join(as.data.frame(D6), as.data.frame(Ddbp), by = 'HADM_ID')
+
+Dsbp <- data_sbp  %>% select(HADM_ID, sbp)
+D8 <- left_join(as.data.frame(D7), as.data.frame(Dsbp), by = 'HADM_ID')
+
+#merge newly pulled data with the cohort
+cohort_apache_dat <- as.data.frame(merge(cohort, D8, by='HADM_ID'))
+cohort_apache_dat <- cbind(HADM_ID=c(cohort_apache$HADM_ID), SUBJECT_ID=c(cohort_apache$SUBJECT_ID), age=c(cohort_apache$AGE), hr=c(cohort_apache$HR), creatinine=c(cohort_apache$creatinine), hematocrit=c(cohort_apache$hematocrit), gcs=c(cohort_apache$gcs), potassium=c(cohort_apache$potassium), sodium=c(cohort_apache$sodium), dbp=c(cohort_apache$dbp), sbp=c(cohort_apache$sbp), APACHE_HF=c(cohort_apache$APACHE_HF))
+```
+
+##Feature Visualizations
+```{r message=F, warning=F}
+#Histograms of main variables
+  #age
+ggplot(data=cohort_apache, aes(cohort_apache$age)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #hr
+ggplot(data=cohort_apache, aes(cohort_apache$hr)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #creatinine
+ggplot(data=cohort_apache, aes(cohort_apache$creatinine)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #hematocrit
+ggplot(data=cohort_apache, aes(cohort_apache$hematocrit)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #gcs
+ggplot(data=cohort_apache, aes(cohort_apache$gcs)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #potassium
+ggplot(data=cohort_apache, aes(cohort_apache$potassium)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #sodium
+ggplot(data=cohort_apache, aes(cohort_apache$sodium)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #dbp
+ggplot(data=cohort_apache, aes(cohort_apache$dbp)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+  #sbp
+ggplot(data=cohort_apache, aes(cohort_apache$sbp)) + geom_histogram(breaks=seq(0, 200, by =2), col="red", aes(fill=..count..))
+```
+
+#Data Manipulation
+##Feature Selection
+Features were selected based on the variables needed to calculate the APACHE scores.  These features included age, heart rate, creatinine, hematocrit, Glasgo comma score, potassium, sodium, and mean arterial blood pressure.  Because MAP was not recorded for a large percentage of the cohort patients, we instead pulled data on diastolic blood pressure and systolic blood pressure and calculated MAP ([MDcalc.com, accessed 2019](https://www.mdcalc.com/mean-arterial-pressure-map#evidence)) from these components using the equation:
+$$MAP=\frac{SBP+2DBP}{3}$$
+Using this equation we can calculate  value of MAP even for patients who didn't have MAP directly recorded.
+
+##Imputation
+ 
+###Data Missingnes
+As previousely stated, we found that certain features exhibited a high degree of missingness which necessitated using imputation to allow score calculations for all patients in the cohort.  The two features with the most missingness were SBP and DBP.  Although there was at least some missingness in every feature, it was generally not very high.
+```{r message=F, warning=F}
+#missingness analysis: number of missing values for each column
+sum(is.na(cohort_apache[,4])) #hr
+sum(is.na(cohort_apache[,5])) #creatinine
+sum(is.na(cohort_apache[,6])) #hematocrit
+sum(is.na(cohort_apache[,7])) #gcs
+sum(is.na(cohort_apache[,8])) #potasium
+sum(is.na(cohort_apache[,9])) #sodium
+sum(is.na(cohort_apache[,10])) #dbp
+sum(is.na(cohort_apache[,11])) #sbp
+```
+###Imputation Code
+The code used to perform multiple imutation on the dataset was:
+```{r message=F, warning=F}
+#multiple imputation for missing data
+cohort_apache_comp_missing <- as.data.frame(cohort_apache)
+imputations <-mi(cohort_apache_comp_missing, n.iter=5, n.chains=1, verbose=TRUE)
+cohort_apache_imputed <- complete(imputations, 1)
+
+cohort_apache_imputed <-cohort_apache_imputed [,1:12]
+
+kable(head(cohort_apache_imputed), caption="Sample of imputed data") %>%
+  kable_styling(bootstrap_options='striped')
+```
+###Imputation Comparison: Features
+To check wether imputation significantly changed the distribution of each feature we can compare the distribution before and after imputation for all features individually:
+```{r message=F, warning=F}
+#hr
+hist(cohort_apache$hr, col=rgb(1,0,0,0.5),xlim=c(0,150), ylim=c(0,1500), main='Heart Rate Before/After Imputation', xlab='Heart Rate')
+hist(cohort_apache_imputed$hr, col=rgb(0,0,1,0.5), add=T)
+box()
+
+#creatinine
+hist(cohort_apache$creatinine, col=rgb(1,0,0,0.5),xlim=c(0,50), ylim=c(0,6000), main='Creatinine Before/After Imputation', xlab='Creatinine')
+hist(cohort_apache_imputed$creatinine, col=rgb(0,0,1,0.5), add=T)
+box()
+
+#Hematocrit
+hist(cohort_apache$hematocrit, col=rgb(1,0,0,0.5),xlim=c(0,60), ylim=c(0,2500), main='Hematocrit Before/After Imputation', xlab='Hematocrit')
+hist(cohort_apache_imputed$hematocrit, col=rgb(0,0,1,0.5), add=T)
+box()
+
+#GCS
+hist(cohort_apache$gcs, col=rgb(1,0,0,0.5),xlim=c(0,20), ylim=c(0,5000), main='GCS Before/After Imputation', xlab='GCS')
+hist(cohort_apache_imputed$gcs, col=rgb(0,0,1,0.5), add=T)
+box()
+
+#Potassium
+hist(cohort_apache$potassium, col=rgb(1,0,0,0.5),xlim=c(0,150), ylim=c(0,6000), main='Potassium Before/After Imputation', xlab='Potassium')
+hist(cohort_apache_imputed$potassium, col=rgb(0,0,1,0.5), add=T)
+box()
+
+#Sodium
+hist(cohort_apache$sodium, col=rgb(1,0,0,0.5),xlim=c(0,170), ylim=c(0,5000), main='Sodium Before/After Imputation', xlab='Sodium')
+hist(cohort_apache_imputed$sodium, col=rgb(0,0,1,0.5), add=T)
+box()
+
+#dbp
+hist(cohort_apache$dbp, col=rgb(1,0,0,0.5),xlim=c(0,150), ylim=c(0,2000), main='DBP Before/After Imputation', xlab='DBP')
+hist(cohort_apache_imputed$dbp, col=rgb(0,0,1,0.5), add=T)
+box()
+
+#sbp
+hist(cohort_apache$sbp, col=rgb(1,0,0,0.5),xlim=c(0,250), ylim=c(0,1000), main='SBP Before/After Imputation', xlab='SBP')
+hist(cohort_apache_imputed$sbp, col=rgb(0,0,1,0.5), add=T)
+box()
+```
+
+#Scoring
+##Discussion of the APACHE-HF Scoring System
+The APACHE-HF scoring system is used to predict adverse outcomes in patients diagnosed with acute heart failure ([Okazaki, H et all](https://www.sciencedirect.com/science/article/pii/S0914508714000951)).
+Essentially, the higher the score is for a given patient the more likely they are to experience adverse outcomes.  The scores are calculated based on seven distinct variables: mean arterial pressure (in our case this is calculated from systolic and diastolic blood pressure) heart rate, sodium, potassium, creatinine, hematocrit,Glasgow coma score, and age.
+Every patient starts with an initial score of zero and then points are added based on various criteria.  The rules for adding points to the scoring system are:
+
+1. *MAP*: Add one point to the scoring system if MAP is less than or equal to 90.
+2. *Heart Rate*: Add one point to the scoring system if heart rate is less than or equal to 110.
+3. *Sodium*: Add one point to the scoring system if sodium is less than or equal to 137.
+4. *Potassium*: Add one point to the scoring system if potassium is greater than or equal to 4.9.
+5. *Creatinine*: Add one point to the scoring system if creatinine is greater than or equal to 1.48.
+6. *Hematocrit*: Add one point to the scoring system if hematocrit is less than or equal to 36.9.
+7. *Glasgow Coma Score*: Add one point to the scoring system if GCS is less than or equal to 13.
+8. *Age*: Add one point to the scoring system if age is greater than or equal to 72.
+
+This process will assign each patient a clinically meaningfull score between 0 and 8 to asses  their risk for adverse events based on their heart failure diagnosis and available lab data.
+##Calculation Code
+Calculations of scores were made according to the published APACHE score documentations, which listed out rules for determinimg a patient's score based on the various features.
+```{r message=F, warning=F}
+#calculate the APACHE-HF score for complete cases (no missingness):
+cohort_apache_comp = as.data.frame(cohort_apache)
+cohort_apache_comp$APACHE_HF <- rep(x=0, times = nrow(cohort_apache_comp))
+cohort_apache_comp$APACHE_HF <- ifelse((cohort_apache_comp$sbp+2*cohort_apache_comp$dbp)/3<=90, yes = 1, no = cohort_apache_comp$APACHE_HF)
+cohort_apache_comp$APACHE_HF <- ifelse(cohort_apache_comp$hr<=110, yes = cohort_apache_comp$APACHE_HF+1, no = cohort_apache_comp$APACHE_HF)
+cohort_apache_comp$APACHE_HF <- ifelse(cohort_apache_comp$sodium<=137, yes = cohort_apache_comp$APACHE_HF+1, no = cohort_apache_comp$APACHE_HF)
+cohort_apache_comp$APACHE_HF <- ifelse(cohort_apache_comp$potassium>=4.9, yes = cohort_apache_comp$APACHE_HF+1, no = cohort_apache_comp$APACHE_HF)
+cohort_apache_comp$APACHE_HF <- ifelse(cohort_apache_comp$creatinine>=1.48, yes = cohort_apache_comp$APACHE_HF+1, no = cohort_apache_comp$APACHE_HF)
+cohort_apache_comp$APACHE_HF <- ifelse(cohort_apache_comp$hematocrit<=36.9, yes = cohort_apache_comp$APACHE_HF+1, no = cohort_apache_comp$APACHE_HF)
+cohort_apache_comp$APACHE_HF <- ifelse(cohort_apache_comp$gcs<=13, yes = cohort_apache_comp$APACHE_HF+1, no = cohort_apache_comp$APACHE_HF)
+cohort_apache_comp$APACHE_HF <- ifelse(cohort_apache_comp$age>=72, yes = cohort_apache_comp$APACHE_HF+1, no = cohort_apache_comp$APACHE_HF)
+
+APACHE_HF = cohort_apache_comp$APACHE_HF
+
+#calculate the APACHE-HF score after imputation (all cases, missing data imputed): 
+cohort_apache_imputed$APACHE_HF <- rep(x=0, times = nrow(cohort_apache_imputed))
+cohort_apache_imputed$APACHE_HF <- ifelse((cohort_apache_imputed$sbp+2*cohort_apache_imputed$dbp)/3<=90, yes = 1, no = cohort_apache_imputed$APACHE_HF)
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$hr<=110, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$sodium<=137, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$potassium>=4.9, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$creatinine>=1.48, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$hematocrit<=36.9, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$gcs<=13, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+cohort_apache_imputed$APACHE_HF <- ifelse(cohort_apache_imputed$age>=72, yes = cohort_apache_imputed$APACHE_HF+1, no = cohort_apache_imputed$APACHE_HF)
+
+
+APACHE_HF_imputed = cohort_apache_imputed$APACHE_HF
+```
+##Imputation Comparison: Scores
+Next we need to determine if the imputed data points altered the overall distribution of the APACHE scores calculated to cohort patients.  To do so, we compare the histogram of the scores based only on patients with complete data with the histogram of scores from all patients after imputation is used to infer values for missing data points:
+```{r message=F, warning=F}
+h1 = hist(APACHE_HF, col=rgb(1,0,0,0.5),xlim=c(0,8), ylim=c(0,2500), main='Scores Before Imputation', xlab='APACHE Score')
+print(h1)
+```
+```{r message=F, warning=F}
+h2 = hist(APACHE_HF_imputed, col=rgb(0,0,1,0.5),xlim=c(0,8), ylim=c(0,2500), main='Scores After Imputation', xlab='APACHE Score')
+print(h2)
+```
+```{r message=F, warning=F}
+hist(APACHE_HF, col=rgb(1,0,0,0.5),xlim=c(0,8), ylim=c(0,2500), main='Scores Before/After Imputation', xlab='APACHE Score')
+hist(APACHE_HF_imputed, col=rgb(0,0,1,0.5), add=T)
+box()
+```
+
+#Risk Analysis
+##Mortality Calculation
+Based on the information available for each patient we can calculate the time until mortality by subtracting time of discharge from hospital from the patient's time of mortaliaty.  
+
+For patient i:
+$$T_{Mortality,i}=T_{Death,i}-T_{Discharge,i}$$
+To calculate time to mortality for each patient in the cohort:
+
+```{r message=F, warning=F}
+cohort_for_mortality <- cohort
+cohort_for_mortality$Score <- APACHE_HF_imputed
+cohort_for_mortality <- cohort_for_mortality[!is.na(cohort_for_mortality$DOD),]
+
+time_to_mortality = as.numeric(difftime(as.Date(cohort_for_mortality$DOD, format = "%m/%d/%Y"), as.Date(cohort_for_mortality$DISCHTIME.x, format = "%m/%d/%Y"), units = c('days')))
+hist(time_to_mortality)
+```
+
+##Score vs Mortlity (Binary)
+Mortality can be treated as a binary variablt, determining patients who survive for a certin amount of time after discharge, to model the relationship between APACHE score and time of mortality.
+
+We considered seven different time to mortality ranges, separating patients into those who survived for 0 days after discharge, 2 days after discharge, 2 weeks after discharge, 6 months after discharge, 1 year after discharge, 2 years after discharge, and over 2 years after discharge.
+
+For each category we can then determine the mean APACHE score for patients in each of the catogories.
+```{r message=F, warning=F}
+HADM_ID = cohort_for_mortality$HADM_ID
+Score = cohort_for_mortality$Score
+Mortality = time_to_mortality
+cohort_apache_mortality = cbind(HADM_ID, Score, Mortality)
+cohort_apache_mortality_0days = subset(cohort_apache_mortality, Mortality == 0)
+cohort_apache_mortality_2days = subset(cohort_apache_mortality, Mortality<=2 & Mortality>0)
+cohort_apache_mortality_2weeks = subset(cohort_apache_mortality, Mortality<=14 & Mortality>2)
+cohort_apache_mortality_6months = subset(cohort_apache_mortality, Mortality<=182.5 & Mortality>14)
+cohort_apache_mortality_1year = subset(cohort_apache_mortality, Mortality<=365 & Mortality>182.5)
+cohort_apache_mortality_2years = subset(cohort_apache_mortality, Mortality<=730 & Mortality>365)
+cohort_apache_mortality_over2years = subset(cohort_apache_mortality, Mortality>730)
+
+mean_score = c(mean(cohort_apache_mortality_0days[,2]), mean(cohort_apache_mortality_2days[,2]),
+               mean(cohort_apache_mortality_2weeks[,2]), mean(cohort_apache_mortality_6months[,2]), 
+               mean(cohort_apache_mortality_1year[,2]), mean(cohort_apache_mortality_2years[,2]), 
+               mean(cohort_apache_mortality_over2years[,2]))
+lower_score = c(t.test(cohort_apache_mortality_0days[,2])$"conf.int"[1],
+                t.test(cohort_apache_mortality_2days[,2])$"conf.int"[1],
+                t.test(cohort_apache_mortality_2weeks[,2])$"conf.int"[1],
+                t.test(cohort_apache_mortality_6months[,2])$"conf.int"[1],
+                t.test(cohort_apache_mortality_1year[,2])$"conf.int"[1],
+                t.test(cohort_apache_mortality_2years[,2])$"conf.int"[1],
+                t.test(cohort_apache_mortality_over2years[,2])$"conf.int"[1])
+upper_score = c(t.test(cohort_apache_mortality_0days[,2])$"conf.int"[2],
+                t.test(cohort_apache_mortality_2days[,2])$"conf.int"[2],
+                t.test(cohort_apache_mortality_2weeks[,2])$"conf.int"[2],
+                t.test(cohort_apache_mortality_6months[,2])$"conf.int"[2],
+                t.test(cohort_apache_mortality_1year[,2])$"conf.int"[2],
+                t.test(cohort_apache_mortality_2years[,2])$"conf.int"[2],
+                t.test(cohort_apache_mortality_over2years[,2])$"conf.int"[2])
+bin_size = c('0 days', '2 days', '2 weeks', '6 months', '1 year', '2 years', 'over 2 years')
+bin_size2=factor(bin_size, levels = bin_size)
+mean_score = round(mean_score, 3)
+lower_score = round(lower_score,3)
+upper_score = round(upper_score,3)
+mortality_CI = as.data.frame(cbind(bin_size2, mean_score, lower_score, upper_score))
+
+#visualize for different bin sizes
+ggplot() + 
+  geom_errorbar(data=mortality_CI, mapping=aes(x=bin_size, ymin=upper_score, ymax=lower_score), width=0.2, size=1, color="blue") + 
+  geom_point(data=mortality_CI, mapping=aes(x=bin_size, y=mean_score), size=4, shape=21, fill="white") +
+  geom_text(aes(label = round(mean_score, digits = 2)), x = c(1,2,3,4,5,6,7)+0.4, y = mean_score-0.03, vjust = -0.25) +
+  ggtitle("Time to Mortality as a Discrete Variable") + xlab("Bin Size") + ylab("Mean APACHE Score")
+ 
+```
+
+##Score vs Mortality (Continuous)
+If we treat time to mortality instead as a continuous variable, it is possible to visualize the connection between a patient's APACHE score calculated at discharge and their expected time to mortality.
+
+For each of the possible APACHE scores (1 to 8) we can visualize the average time to mortality for patients who receive that score upon discharge:
+```{r message=F, warning=F}
+# calculate mean time to mortality for each score
+dat=cbind(Score, time_to_mortality)
+dat=as.data.frame(dat)
+plotdata <- dat %>%
+  group_by(Score) %>%
+  summarize(mean_ttm = mean(time_to_mortality))
+
+# plot mean ttm
+ggplot(plotdata, 
+       aes(x = factor(Score,
+          labels = c('0','1','2','3','4','5','6','7')), 
+           y = mean_ttm)) +
+  geom_bar(stat = "identity", 
+           fill = "cornflowerblue") +
+  geom_text(aes(label = round(mean_ttm, digits = 2)), 
+            vjust = -0.25) +
+  scale_y_continuous(breaks = seq(0,2000, 100)) +
+  labs(title = "Mean Time to Mortality by APACHE Score", 
+       subtitle = "measured in days",
+       x = "",
+       y = "")
+```
+
+##Survival Curve
+Using time to mortality as a continuous variable, we can estimate a survival curve based on the data:
+```{r message=F, warning=F}
+cohort_for_survival <- merge(cohort, cohort_apache)
+cohort_for_survival$Score <- APACHE_HF_imputed
+cohort_for_survival <- cohort_for_survival[!is.na(cohort_for_survival$DOD),]
+cohort_for_survival$mortality = time_to_mortality
+
+# status 0 = alive at 6 months, 1 = died between discharge and 6 months
+cohort_for_survival$status <- rep(x=0, times = nrow(cohort_for_survival))
+cohort_for_survival$status <- ifelse(cohort_for_survival$mortality>182.5,yes=cohort_for_survival$status, no=cohort_for_survival$status+1)
+pd_surv_fit <- survfit(Surv(Score,status)~1, data=cohort_for_survival)
+plot(pd_surv_fit, xlab="APACHE score", ylab="Survival Probability")
+summary(pd_surv_fit)
+```
+
+```{r message=F, warning=F}
+pd_surv_fit2 <- survfit(Surv(hr,status)~1, data=cohort_for_survival)
+ggsurvplot(pd_surv_fit2, xlab="Time in hospital")
+
+# survival polt for score 0-2
+cohort_for_survival_interval02 <- cohort_for_survival[cohort_for_survival$Score<=2,]
+pd_surv_fit02 <- survfit(Surv(hr,status)~1, data=cohort_for_survival_interval02)
+ggsurvplot(pd_surv_fit02,xlab="Time in hospital")
+#survival plot for score 3-5
+cohort_for_survival_interval35 <- cohort_for_survival[which(cohort_for_survival$Score>=3 & cohort_for_survival$Score<=5),]
+pd_surv_fit35 <- survfit(Surv(hr,status)~1, data=cohort_for_survival_interval35)
+ggsurvplot(pd_surv_fit35,xlab="Time in hospital")
+# survival plot for score greater or equal to 6
+cohort_for_survival_interval6 <- cohort_for_survival[which(cohort_for_survival$Score>=6),]
+pd_surv_fit6 <- survfit(Surv(hr,status)~1, data=cohort_for_survival_interval6)
+ggsurvplot(pd_surv_fit6,xlab="Time in hospital")
+```
+
+# References
+
+Okazaki H, Shirakabe A, Hata N, Yamamoto M, Kobayashi N,
+Shinada T, Tomita K, Tsurumi M, Matsushita M, Yamamoto Y,
+Yokoyama S, Asai K, Shimizu W. 
+New scoring system (APACHEHF) for predicting adverse outcomes in patients with 
+acute heart failure: evaluation of the APACHE II and Modified APACHE II scoring systems. 
+J Cardiol 2014; 64: 441-449 [PMID: 24794758 DOI: 10.1016/j.jjcc.2014.03.002]
+
+Passantino, Andrea & Monitillo, Francesco & Iacoviello, Massimo & Scrutinio, Domenico. (2015). 
+Predicting mortality in patients with acute heart failure: Role of risk scores. 
+World Journal of Cardiology. 7. 902. 10.4330/wjc.v7.i12.902. 
+
+MDCalc.com, Mean Arterial Pressure MAP, accessed 2019, https://www.mdcalc.com/mean-arterial-pressure-map#evidence
 
