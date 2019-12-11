@@ -16,13 +16,25 @@ smooth_scroll: yes
   
 *Libraries Used*
 ```{r message=F, warning=F}
+# Data I/O
+#library('RPostgreSQL')    # access MIMIC-III
+library('reshape2')       # melting dataframes
+library('dplyr')          # misc. organization
 library('bigrquery')     # Query data from Google BigQuery
-library('knitr')         # Make knited tables ("kables")
-library('kableExtra')    # Extra kable formatting options
-library('ggplot2')       # Plotting library
-library('ggpubr')        # More options for ggplot
+# Data preparation
+library('psych')          # descriptive stats
 
-project = 'socr-mdp-mimic-analytics' # CHANGE THIS TO YOUR PROJECT ID
+# Plots and tables
+library('knitr')          # knitting Rmd to HTML; kable() function
+library('kableExtra')     # extra formating options for knitr tables
+library('ggplot2')        # 2d plotting
+library('ggpubr')         # extra formatting options for ggplot
+library('gtools')
+library("lubridate")
+
+library(survival)
+
+project = 'mimic-iii-244018'
 ```
 
 # Introduction
@@ -189,12 +201,518 @@ pull.last.event <- function(hadm_id, itemcodes, return.fields, table, project, m
 }
 ```
 
-## Systolic Blood Pressure
+# Discussion of EFFECT, OPTIME, OPTIMIZE
 
-```{r message=F, warning=F}
-sbp.itemcodes <- c( 6, 51, 442, 3313, 3315, 3317, 3321, 3323, 3325, 6701, 228152, 224167, 227243, 220050, 220179, 225309 )
-return.fields <- c('SUBJECT_ID', 'HADM_ID', 'ITEMID', 'CHARTTIME', 'VALUENUM', 'VALUEUOM')
-data.sbp <- pull.last.event(cohort$HADM_ID, sbp.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+## EFFECT Scoring System
+The Enhanced Feedback for Effective Cardiac Treatment (EFFECT) scoring system is a derivation and validation of a clinical model that aims to predict mortality among patients hospitalized for heart failure. The objective is to identify high-risk heart failure patients at hospital discharge, thus allowing more effective triage to management strategies. In order to apply the EFFECT scoring system on the MIMIC-III dataset, we retrieved the cohort patients' age, systolic blood pressure, elevated blood urea nitrogen level, sodium concentration, cerebrovascular disease, hepatic cirrhosis, history of cancer and hemoglobin level. {r} [(M. O'Connor 2010)] {https://www.sciencedirect.com/science/article/pii/S0735109709040595}
+
+## OPTIME-CHF Scoring System
+The Outcomes of a Prospective Trial of Intravenous Milrinone for Exacerbations of Chronic Heart Failure (OPTIME-CHF) trial aims to evaluate the treatment strategies in the care of population with acute exacerbations of chronic heart failure. The primary goal of this scoring system is a reduction in the total hospital days for cardiovascular events within 60 days after therapy. In order to apply the OPTIME-CHF scoring system on the MIMIC-III dataset, we retrieved the cohort patients' age, elevated blood urea nitrogen level and systolic blood pressure. {r} [(Duke Clinical Research Institue 2004)] {https://www.ncbi.nlm.nih.gov/pubmed/15599835}
+
+Note: The OPTIME-CHF scoring system also includes NYHA Class as one of the criteria, but since it is not included as part of the MIMIC-III dataset and is a classification system that is highly subjective and varies strongly depending on the doctor diagnosing, it is left out of our calculations in this study.
+
+## OPTIMIZE-HF Scoring System
+The Organized Program to Initiate Lifesaving Treatment in Hospitalized Patients with Heart Failure (OPTIMIZE-HF) is a comprehensive hospital-based registry and performance-improvement program designed to predict in-hospital mortality in patients hospitalized for heart failure. In order to apply the OPTIMIZE-HF scoring system on the MIMIC-III dataset, we retrieved the cohort patients' age, weight, systolic blood pressure, creatinine level, liver disease, history of depression and reactive airway disease. {r} [(Duke Clinical Research Institue 2008)] {https://www.ncbi.nlm.nih.gov/pubmed/18926148}
+
+## Extracting itemcodes
+
+### BUN item codes
+```{r}
+sql = "SELECT ITEMID FROM [physionet-data.mimiciii_clinical.d_items] 
+        WHERE LABEL LIKE \"%BUN%\""
+bun.itemcodes = query_exec(sql, project=project)
+bun.itemcodes = bun.itemcodes$ITEMID
+```
+ 
+### Creatinine item code
+```{r}
+sql = "SELECT ITEMID FROM [physionet-data.mimiciii_clinical.d_items] 
+        WHERE LABEL LIKE \"%creatinine%\" OR LABEL LIKE \"%Creatinine%\" "
+creatinine.itemcodes = query_exec(sql, project=project)
+creatinine.itemcodes = creatinine.itemcodes$ITEMID
 ```
 
+### Hemoglobin item codes
+```{r}
+sql = "SELECT ITEMID FROM [physionet-data.mimiciii_clinical.d_items] 
+        WHERE LABEL LIKE \"%hemoglobin%\" OR LABEL LIKE \"%Hemoglobin%\" "
+hemoglobin.itemcodes = query_exec(sql, project=project)
+hemoglobin.itemcodes = hemoglobin.itemcodes$ITEMID
+```
+
+### Sodium itemcodes
+```{r}
+sql = "SELECT ITEMID FROM [physionet-data.mimiciii_clinical.d_items] 
+        WHERE LABEL LIKE \"%sodium%\" OR LABEL LIKE \"%Sodium%\" "
+sodium.itemcodes = query_exec(sql, project=project)
+sodium.itemcodes = sodium.itemcodes$ITEMID
+```
+
+## Extract lab results
+
+This pull.last.event function is going to be used when extracting lab results
+```{r message=F, warning=F}
+pull.last.event <- function(hadm_id, itemcodes, return.fields, table, project, max_pages=Inf) {
+  sql <- sprintf("
+                 SELECT *
+                 FROM [physionet-data.mimiciii_clinical.%s] AS table1
+                 INNER JOIN (
+                   SELECT hadm_id, MAX(charttime), MAX(row_id)
+                   FROM [physionet-data.mimiciii_clinical.%s]
+                   WHERE itemid IN (%s)
+                   AND hadm_id IN (%s)
+                   GROUP BY hadm_id
+                 ) AS table2
+                 ON table1.row_id = table2.f1_",
+                 table, table, 
+                 paste(itemcodes, collapse=", "),
+                 paste(hadm_id, collapse=", ")
+  )
+  
+  data <- query_exec(sql, project=project, max_pages=max_pages)
+  colnames(data) <- gsub('table[0-9]_', '', colnames(data))
+  return(data[ , return.fields])
+}
+```
+
+### Systolic Blood Pressure
+```{r message=F, warning=F}
+sbp.itemcodes <- c( 6, 51, 442, 3313, 3315, 3317, 3321, 3323, 3325, 6701, 228152, 224167, 227243, 220050, 220179, 225309 )
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.sbp <- pull.last.event(cohort$HADM_ID, sbp.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.sbp)[2] = "SBP"
+```
+
+### Blood Urea Nitrogen
+```{r}
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.bun <- pull.last.event(cohort$HADM_ID, bun.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.bun)[2] = "BUN"
+```
+
+### Creatinine
+```{r}
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.creatinine <- pull.last.event(cohort$HADM_ID, creatinine.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.creatinine)[2] = "Creatinine"
+```
+
+### Weight
+```{r}
+weight.itemcodes <- c(226531, 763)
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.weight <- pull.last.event(cohort$HADM_ID, weight.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.weight)[2] = "Weight"
+```
+
+### Sodium
+```{r}
+sodium.itemcodes <- c(220645)
+return.fields <- c('HADM_ID', 'VALUENUM')
+data.sodium <- pull.last.event(cohort$HADM_ID, sodium.itemcodes, return.fields, 'chartevents', project, max_pages=1)
+
+colnames(data.sodium)[2] = "Sodium"
+```
+
+### Hepatic Cirrhosis
+[5715 is the icd9 code for hepatic cirrhosis](http://www.icd9data.com/2012/Volume1/520-579/570-579/571/571.5.htm)
+```{r}
+sql <- "SELECT hadm_id
+        FROM [physionet-data.mimiciii_clinical.diagnoses_icd]
+        WHERE icd9_code = \"5715\" "
+
+cirr.cohort <- query_exec(sql, project=project)
+
+```
+
+## Combine the data
+```{r}
+cohort <- left_join(cohort, data.sbp, by='HADM_ID') %>%
+                left_join(., data.creatinine, by='HADM_ID') %>%
+                left_join(., data.weight, by='HADM_ID') %>%
+                left_join(., data.sodium, by='HADM_ID')
+
+cohort$cirr = FALSE
+cohort$cirr = cohort$HADM_ID %in% cirr.cohort$hadm_id
+```
+
+### Liver Disease
+```{r eval=T, message=F, warning=F}
+# History of Liver Disease
+sql_icd9_liver <- sprintf("
+                    SELECT SUBJECT_ID
+                    FROM [physionet-data.mimiciii_clinical.diagnoses_icd] 
+                    WHERE icd9_code IN ('570', '5710', '5712', '5713', '5715', '5728', '5807', '5730', '5738', '5739', '5718', '5719') ")
+ld_data <- query_exec(sql_icd9_liver, project, max_pages = 1)
+ld_vector <- pull(ld_data, SUBJECT_ID) # subject ids for history of liver disease
+
+cohort$Liver <- rep(0, nrow(cohort))
+cohort$Liver <- ifelse(cohort$SUBJECT_ID %in% ld_vector, 1, 0)
+```
+
+### History of Depression
+We referenced [Appendix A.2 from Healthcare Cost and Utilization Project (HCUP) Statistical Briefs](https://www.ncbi.nlm.nih.gov/books/NBK409512/table/sb216.t6/) in selection of ICD9 codes related to depression. 
+```{r eval=T, message=F, warning=F}
+sql_icd9_depression <- sprintf("
+    SELECT SUBJECT_ID
+    FROM [physionet-data.mimiciii_clinical.diagnoses_icd] 
+    WHERE icd9_code IN ('29021', '29013', '30112', '29621', '29682', '311', '2980', '29633', '29632', '29626', '29625', '29624', '29623', '29620', '29622', '3091', '29634', '29636', '29635', '29631', '29630') ") 
+
+depression_data <- query_exec(sql_icd9_depression, project, max_pages = 1)
+depression_vector <- pull(depression_data, SUBJECT_ID) # subject ids of all patients who ever had depression
+                
+cohort$Depression <- rep(0,nrow(cohort))
+cohort$Depression <- ifelse(cohort$SUBJECT_ID %in% depression_vector, 1, 0)
+```
+
+### History of Reactive Airway Disease
+```{r eval=T, message=F, warning=F}
+sql_icd9_reac <- sprintf("
+                    SELECT SUBJECT_ID
+                    FROM [physionet-data.mimiciii_clinical.diagnoses_icd] 
+                    WHERE icd9_code IN ('49390', '49310', '49320', '49311', '49312', '49321', '49322') ")
+reac_data <- query_exec(sql_icd9_reac, project, max_pages = 1)
+reac_vector <- pull(reac_data, SUBJECT_ID)
+
+cohort$Reactive_airway <- rep(0, nrow(cohort))
+cohort$Reactive_airway <- ifelse(cohort$SUBJECT_ID %in% reac_vector, 1, 0)
+```
+
+### History of Cancer
+We referenced [Weiner, M.D. et. al’s paper](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1480106/?fbclid=IwAR2rOQKA9k-61IqwWto3c_6mOcNfdBUzbd2R6y0h6JhCoJTaJ3LynO9B2Fw) for which ICD9 codes to extract for a subject’s history of cancer. We used all groups of cancer so to include anyone with a history of cancer. 
+```{r eval=T, message=F, warning=F}
+c_icd <- c(seq(1400, 1649, by=1), seq(1700, 1759, by=1), seq(1800, 1809, by = 1), 
+                             seq(1820, 1969, by=1), seq(1990, 1999, by=1), seq(2350, 2399, by=1))
+c_string_icd <- toString(sprintf("'%s'", c_icd))
+
+sql_icd9_cancer <- sprintf("
+SELECT SUBJECT_ID
+    FROM [physionet-data.mimiciii_clinical.diagnoses_icd] 
+    WHERE icd9_code IN (%s)", paste(c_string_icd, collapse=", "))
+cancer_data <- query_exec(sql_icd9_cancer, project, max_pages = 1)
+cancer_vector <- pull(cancer_data, SUBJECT_ID)
+
+cohort$Cancer <- rep(0, nrow(cohort))
+cohort$Cancer <- ifelse(cohort$SUBJECT_ID %in% cancer_vector, 1, 0)
+
+
+kable(head(cohort), caption="Sample of cohort data") %>%
+  kable_styling(bootstrap_options='striped')
+```
+
+# Imputation of missing values and related plots
+add references to dinov's tutorial
+
+```{r eval=T, message=F, warning=F}
+library(Amelia)
+sim_data.df <- read.csv(file='DATA_MASTER.csv', header=TRUE)
+dim(sim_data.df)
+amelia.out <- amelia(sim_data.df, m = 5)
+amelia.out
+amelia.imputed.5 <- amelia.out$imputations[[5]]
+
+```
+
+# EFFECT Score Calculation
+```{r eval=T, message=F, warning=F}
+# EFFECT
+#age, cbv disease, dementia, COPD, BUN + cirrhosis + hemoglobin + resp, SBP, SODIUM
+cohort$EFFECT <- rep(0, nrow(cohort))
+for (i in 1:nrow(cohort)){
+  score <- 0
+  #age
+  score <- score + cohort$AGE[i]
+  if( cohort$CV_Disease[i] == 1){
+    score <- score + 10
+  }
+  if( cohort$Dementia[i] == 1){
+    score <- score + 10
+  }
+  if (cohort$COPD[i] == 1){
+    score <- score + 20
+  }
+  # do nothing for hemoglobin i guess
+  if(cohort$BUN[i] <= 60){
+    score <- score + cohort$BUN[i]
+  }
+  if(cohort$RESP_RATE[i] >= 20 && cohort$RESP_RATE[i] <= 45){
+    score <- score + cohort$RESP_RATE[i]
+  }
+  if( cohort$cirrhosis[i] == 1){
+    score <- score + 25
+  }
+  # sbp
+  if(cohort$SBP[i] >= 180){
+    score <- score - 60
+  } else if(cohort$SBP[i] >= 160){
+    score <- score - 55
+  } else if(cohort$SBP[i] >= 140){
+    score <- score - 50
+  } else if(cohort$SBP[i] >= 120){
+    score <- score- 45
+  } else if(cohort$SBP[i] >= 100){
+    score <- score - 40
+  } else if(cohort$SBP[i] >= 90){
+    score <- score - 35
+  } else if(cohort$SBP[i] < 90){
+    score <- score - 30
+  }
+  if(cohort$SODIUM[i] < 136){
+   score <- score + 10
+  }
+  cohort$EFFECT[i] <- score
+}
+```
+
+# OPTIME Score Calculation
+```{r eval=T, message=F, warning=F}
+# OPTIME
+cohort$OPTIME <- rep(0, nrow(cohort))
+for (i in 1:nrow(cohort)){
+  score = 0
+  if(is.na(AGE)){
+  }else if(AGE > 20 && AGE <= 30){
+    score = score + 8
+  }else if(AGE > 30 && AGE <= 40){
+    score = score + 17
+  }else if(AGE > 40 && AGE <= 50){
+    score = score + 25
+  }else if(AGE > 50 && AGE <= 60){
+    score = score + 33
+  }else if(AGE > 60 && AGE <= 70){
+    score = score + 41
+  }else if(AGE > 70 && AGE <= 80){
+    score = score + 50
+  }else if(AGE > 80 && AGE <= 90){
+    score = score + 58
+  }
+  
+  if(is.na(sodium)){
+  }else if(sodium < 115){
+    score = score + 79
+  }else if(sodium < 120){
+    score = score + 69
+  }else if(sodium < 125){
+    score = score + 59
+  }else if(sodium < 130){
+    score = score + 49
+  }else if(sodium < 135){
+    score = score + 30
+  }else if(sodium < 140){
+    score = score + 20
+  }else if(sodium < 145){
+    score = score + 10
+  }
+  
+  if(is.na(SBP)){
+  }else if(SBP < 80){
+    score = score + 94
+  }else if(SBP < 90){
+    score = score + 86
+  }else if(SBP < 100){
+    score = score + 77
+  }else if(SBP < 110){
+    score = score + 69
+  }else if(SBP < 120){
+    score = score + 60
+  }else if(SBP < 130){
+    score = score + 51
+  }else if(SBP < 140){
+    score = score + 43
+  }else if(SBP < 150){
+    score = score + 34
+  }else if(SBP < 160){
+    score = score + 26
+  }else if(SBP < 170){
+    score = score + 17
+  }else if(SBP < 180){
+    score = score + 9
+  }
+  
+  if(is.na(BUN)){
+  }else if(BUN < 5){
+    score = score + 10
+  }else if(BUN < 10){
+    score = score + 20
+  }else if(BUN < 15){
+    score = score + 30
+  }else if(BUN < 20){
+    score = score + 40
+  }else if(BUN < 25){
+    score = score + 50
+  }else if(BUN < 30){
+    score = score + 60
+  }else if(BUN < 35){
+    score = score + 70
+  }else if(BUN < 40){
+    score = score + 80
+  }else if(BUN < 45){
+    score = score + 90
+  }else{
+    score = score + 100
+  }
+  
+  cohort$OPTIME[i] <- score
+}
+
+
+```
+
+# OPTIMIZE Score Calculation
+```{r eval=T, message=F, warning=F}
+# OPTIMIZE
+#age, cbv disease, dementia, COPD, BUN + cirrhosis + hemoglobin + resp, SBP, SODIUM
+#cohort_complete <- read.csv('DATA.csv')
+
+cohort$OPTIMIZE <- rep(0, nrow(cohort))
+for (i in 1:nrow(cohort)){
+  score <- 0
+  #age
+  if( cohort$AGE[i] < 30){
+    score <- score + 0
+  } else if( cohort$AGE[i] < 40){
+    score <- score + 2
+  }  else if( cohort$AGE[i] < 50){
+    score <- score + 5
+  }  else if( cohort$AGE[i] < 60){
+    score <- score + 7
+  }  else if( cohort$AGE[i] < 70){
+    score <- score + 10
+  }  else if( cohort$AGE[i] < 80){
+    score <- score + 12
+  }  else if( cohort$AGE[i] < 90){
+    score <- score + 15 
+  } else if( cohort$AGE[i] >= 90){
+    score <- score + 17 
+  }  
+  # weight, kg
+  if( cohort$WEIGHT[i] < 70){
+    score <- score + 9
+  } else if( cohort$WEIGHT[i] < 90){
+    score <- score + 7
+  } else if( cohort$WEIGHT[i] < 110){
+    score <- score + 5
+  } else if( cohort$WEIGHT[i] < 130){
+    score <- score + 3
+  } else if( cohort$WEIGHT[i] >= 130){
+    score <- score + 2
+  }
+  # sbp
+  if(cohort$SBP[i] < 90){
+    score <- score + 24
+  } else if(cohort$SBP[i] < 110){
+    score <- score + 20
+  } else if(cohort$SBP[i] < 130){
+    score <- score + 17
+  } else if(cohort$SBP[i] < 150){
+    score <- score + 13
+  } else if(cohort$SBP[i] < 170){
+    score <- score + 11
+  } else if(cohort$SBP[i] < 190){
+    score <- score + 9
+  } else if(cohort$SBP[i] < 210){
+    score <- score +8
+  } else if(cohort$SBP[i] < 230){
+    score <- score +6
+  } else if(cohort$SBP[i] < 250){
+    score <- score +4
+  } else if(cohort$SBP[i] < 270){
+    score <- score +2
+  } else if(cohort$SBP[i] >= 270){
+    score <- score + 0
+  } 
+  
+  #sodium
+  if(cohort$SODIUM[i] < 112.5){
+   score <- score + 12
+  } else if(cohort$SODIUM[i] < 117.5){
+   score <- score + 10
+  } else if(cohort$SODIUM[i] < 122.5){
+   score <- score + 8
+  } else if(cohort$SODIUM[i] < 127.5){
+   score <- score + 6
+  } else if(cohort$SODIUM[i] < 132.5){
+   score <- score + 4
+  } else if(cohort$SODIUM[i] < 137.5){
+   score <- score + 2
+  } else if(cohort$SODIUM[i] >= 137.5 ){
+   score <- score + 0
+  }
+  #creatinine 
+  if (cohort$CREATININE[i] < 0.5){
+    score <- score + 0
+  } else if (cohort$CREATININE[i] < 1.5){
+    score <- score + 5
+  } else if (cohort$CREATININE[i] < 2.5){
+    score <- score + 9
+  } else if (cohort$CREATININE[i] < 3.5){
+    score <- score + 14
+  } else if (cohort$CREATININE[i] >= 3.5){
+    score <- score + 19
+  }
+  
+  # history of liver disease 
+  if(cohort$Liver[i] == 1){
+    score <- score + 8
+  }
+  
+  #history of reactive airway disease 
+  if( cohort$Reactive_airway[i] == 1){
+    score <- score + 4
+  }
+  #history of depression
+  if( cohort$Depression[i] == 1){
+    score <- score + 4
+  }
+  
+  cohort$OPTIMIZE[i] <- score
+}
+```
+
+# Pulling mortality after imputing rest of the data 
+```{r eval=T, message=F, warning=F}
+#add mortality column 
+
+
+```
+
+# Binning patients based on time until death outside of hospital
+```{r eval=T, message=F, warning=F}
+# Death binning code
+# Emily has it and will add if we want it
+
+kable(head(cohort), caption="Sample of cohort data") %>%
+  kable_styling(bootstrap_options='striped')
+```
+
+# Plots analyzing binned death for scores 
+analysis of different scores motives (optimize looking at 6-9 month mortality, ect)
+
+```{r eval=T, message=F, warning=F}
+# plots of binned deaths!
+```
+
+# Mortality as continuous variable plots and survival analysis
+add references to dinov's tutorial
+
+```{r eval=T, message=F, warning=F}
+OPTIMIZE = cohort$mortality
+length(OPTIMIZE)
+
+# Below is the process of survival analysis
+
+# We need to determine the mortatility status first
+# status 0 = alive, 1 = dead in hospital
+cohort$status <- rep(x=0, times = nrow(cohort))
+cohort$status <- ifelse(cohort$mortality>0,yes=cohort$status, no=cohort$status+1)
+pd_surv_fit <- survfit(Surv(OPTIMIZE,status)~1, data=cohort)
+plot(pd_surv_fit, xlab="OPTIMIZE-HF score", ylab="Survival Probability")
+
+summary(pd_surv_fit)
+
+```
 
