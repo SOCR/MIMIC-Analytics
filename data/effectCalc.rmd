@@ -1,0 +1,326 @@
+ ---
+title: "MIMIC-III OPTIME-CHF Score Calculation Demo"
+author: 
+- "<h3><p>Audrey Zhang</p><p>audzhang@umich.edu</p></h3>"
+date: "`r format(Sys.time(), '%B %Y')`"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: default
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+subtitle: <h2><u>Winter 2019, SOCR-MDP</u></h2>
+---
+
+**Libraries Used:**
+```{r message=F, warning=F}
+# Data I/O
+library('RPostgreSQL')    # access MIMIC-III
+library('reshape2')       # melting dataframes
+library('dplyr')          # misc. organization
+
+# Data preparation
+library('psych')          # descriptive stats
+
+# Plots and tables
+library('knitr')          # knitting Rmd to HTML; kable() function
+library('kableExtra')     # extra formating options for knitr tables
+library('ggplot2')        # 2d plotting
+library('ggpubr')         # extra formatting options for ggplot
+library('gtools')
+
+```
+
+**Random Seed Set**
+```{r message=F, warning=F}
+set.seed(123456)
+```
+
+# Introduction
+
+First, load in the CSV containing our cohort 
+
+```{r eval=T, message=F, warning=F}
+#age, cbv disease, dementia, COPD
+cohort_data <- read.csv('new_cohort.csv')
+
+kable(head(cohort_data), caption="Sample of cohort data") %>%
+  kable_styling(bootstrap_options='striped')
+```
+
+###BUN + creatinine + hemoglobin + resp
+```{r eval=T, message=F, warning=F}
+ccbhr <- read.csv('cirr_crea_bun_hemo_resp.csv')
+
+# Add to cohort_data object
+cohort_data <- merge(cohort_data, ccbhr[,c('HADM_ID', 'CREATININE', 'HEMOGLOBIN', 'BUN', 'RESPIRATORY_RATE')], by=c('HADM_ID'), all=T)
+
+colnames(cohort_data) <- c(colnames(cohort_data)[1:(length(cohort_data)-1)], 'RESP_RATE')
+
+# cohort_data = cohort_data[!duplicated(cohort_data$subject_id),]
+
+```
+
+###cirr
+```{r eval=T, message=F, warning=F}
+cirr <- read.csv('cirr.csv')
+
+# Add to cohort_data object
+cohort_data <- merge(cohort_data, cirr[,c('HADM_ID', 'cirrhosis')], by=c('HADM_ID'), all=T)
+
+colnames(cohort_data) <- c(colnames(cohort_data)[1:(length(cohort_data)-1)], 'cirrhosis')
+```
+
+
+###sbp + sodium
+```{r eval=T, message=F, warning=F}
+ss <- read.csv('sodium_sbp.csv')
+
+# Add to cohort_data object
+cohort_data <- merge(cohort_data, ss[,c('HADM_ID', 'SBP')], by=c('HADM_ID'), all=T)
+
+colnames(cohort_data) <- c(colnames(cohort_data)[1:(length(cohort_data)-1)], 'SBP')
+
+```
+
+
+###depression
+```{r eval=T, message=F, warning=F}
+liver <- read.csv('liver_subject_icds.csv')
+reac <- read.csv('reative_airway_disease_subject_ids.csv')
+depre <- read.csv('depression.csv')
+
+# Add to cohort_data object
+cohort_data <- merge(cohort_data, liver[,c('SUBJECT_ID', 'liver_disease')], by=c('SUBJECT_ID'), all=T)
+colnames(cohort_data) <- c(colnames(cohort_data)[1:(length(cohort_data)-1)], 'LIVER')
+
+cohort_data <- merge(cohort_data, reac[,c('SUBJECT_ID', 'airway_disease')], by=c('SUBJECT_ID'), all=T)
+colnames(cohort_data) <- c(colnames(cohort_data)[1:(length(cohort_data)-1)], 'REAC_AIR')
+
+cohort_data <- merge(cohort_data, depre[,c('HADM_ID', 'depression')], by=c('HADM_ID'), all=T)
+colnames(cohort_data) <- c(colnames(cohort_data)[1:(length(cohort_data)-1)], 'DEPRESSION')
+
+
+```
+
+
+Lastly, we'll write the output to CSV for part two
+
+```{r eval=T, message=F, warning=F}
+#take out duplicate hadmids
+cohort_data <- cohort_data[!duplicated(cohort_data[,c('HADM_ID')]),]
+write.csv(cohort_data, file='effect_predictions_final.csv', row.names=F)
+```
+
+## Remove missing variables
+
+We'll also choose to remove rows that contain missing variables - this makes visualization and exploratory data analysis easier, while unfortunately reducing our overall sample size.
+
+```{r message=F, warning=F}
+cohort_data_complete = cohort_data[complete.cases(cohort_data),]
+```
+
+After removing rows with missing values, we're left with `r nrow(cohort_data)` subjects. This is still plenty for our analysis.
+
+## Calculate EFFECT Scores 
+
+```{r message=F, warning=F}
+#age, cbv disease, dementia, COPD, BUN + cirrhosis + hemoglobin + resp, SBP, SODIUM
+
+for (i in 1:nrow(cohort_data_complete)){
+  score <- 0
+  #age
+  score <- score + cohort_data_complete$AGE[i]
+  if( cohort_data_complete$CV_Disease[i] == 1){
+    score <- score + 10
+  }
+  if( cohort_data_complete$Dementia[i] == 1){
+    score <- score + 10
+  }
+  if (cohort_data_complete$COPD[i] == 1){
+    score <- score + 20
+  }
+  # do nothing for hemoglobin i guess
+  if(cohort_data_complete$BUN[i] <= 60){
+    score <- score + cohort_data_complete$BUN[i]
+  }
+  if(cohort_data_complete$RESP_RATE[i] >= 20 && cohort_data_complete$RESP_RATE[i] <= 45){
+    score <- score + cohort_data_complete$RESP_RATE[i]
+  }
+  if( cohort_data_complete$cirrhosis[i] == 1){
+    score <- score + 25
+  }
+  # sbp
+  if(cohort_data_complete$SBP[i] >= 180){
+    score <- score - 60
+  } else if(cohort_data_complete$SBP[i] >= 160){
+    score <- score - 55
+  } else if(cohort_data_complete$SBP[i] >= 140){
+    score <- score - 50
+  } else if(cohort_data_complete$SBP[i] >= 120){
+    score <- score- 45
+  } else if(cohort_data_complete$SBP[i] >= 100){
+    score <- score - 40
+  } else if(cohort_data_complete$SBP[i] >= 90){
+    score <- score - 35
+  } else if(cohort_data_complete$SBP[i] < 90){
+    score <- score - 30
+  }
+  if(cohort_data_complete$SODIUM[i] < 136){
+   score <- score + 10
+  }
+  cohort_data_complete$EFFECT[i] <- score
+}
+```
+
+
+## Calculate OPTIMIZE Scores 
+```{r message=F, warning=F}
+#age, cbv disease, dementia, COPD, BUN + cirrhosis + hemoglobin + resp, SBP, SODIUM
+cohort_data_complete <- read.csv('DATA.csv')
+
+for (i in 1:nrow(cohort_data_complete)){
+  score <- 0
+  #age
+  if( cohort_data_complete$AGE[i] < 30){
+    score <- score + 0
+  } else if( cohort_data_complete$AGE[i] < 40){
+    score <- score + 2
+  }  else if( cohort_data_complete$AGE[i] < 50){
+    score <- score + 5
+  }  else if( cohort_data_complete$AGE[i] < 60){
+    score <- score + 7
+  }  else if( cohort_data_complete$AGE[i] < 70){
+    score <- score + 10
+  }  else if( cohort_data_complete$AGE[i] < 80){
+    score <- score + 12
+  }  else if( cohort_data_complete$AGE[i] < 90){
+    score <- score + 15 
+  } else if( cohort_data_complete$AGE[i] >= 90){
+    score <- score + 17 
+  }  
+  # weight, kg
+  if( cohort_data_complete$WEIGHT[i] < 70){
+    score <- score + 9
+  } else if( cohort_data_complete$WEIGHT[i] < 90){
+    score <- score + 7
+  } else if( cohort_data_complete$WEIGHT[i] < 110){
+    score <- score + 5
+  } else if( cohort_data_complete$WEIGHT[i] < 130){
+    score <- score + 3
+  } else if( cohort_data_complete$WEIGHT[i] >= 130){
+    score <- score + 2
+  }
+  # sbp
+  if(cohort_data_complete$SBP[i] < 90){
+    score <- score + 24
+  } else if(cohort_data_complete$SBP[i] < 110){
+    score <- score + 20
+  } else if(cohort_data_complete$SBP[i] < 130){
+    score <- score + 17
+  } else if(cohort_data_complete$SBP[i] < 150){
+    score <- score + 13
+  } else if(cohort_data_complete$SBP[i] < 170){
+    score <- score + 11
+  } else if(cohort_data_complete$SBP[i] < 190){
+    score <- score + 9
+  } else if(cohort_data_complete$SBP[i] < 210){
+    score <- score +8
+  } else if(cohort_data_complete$SBP[i] < 230){
+    score <- score +6
+  } else if(cohort_data_complete$SBP[i] < 250){
+    score <- score +4
+  } else if(cohort_data_complete$SBP[i] < 270){
+    score <- score +2
+  } else if(cohort_data_complete$SBP[i] >= 270){
+    score <- score + 0
+  } 
+  
+  #sodium
+  if(cohort_data_complete$SODIUM[i] < 112.5){
+   score <- score + 12
+  } else if(cohort_data_complete$SODIUM[i] < 117.5){
+   score <- score + 10
+  } else if(cohort_data_complete$SODIUM[i] < 122.5){
+   score <- score + 8
+  } else if(cohort_data_complete$SODIUM[i] < 127.5){
+   score <- score + 6
+  } else if(cohort_data_complete$SODIUM[i] < 132.5){
+   score <- score + 4
+  } else if(cohort_data_complete$SODIUM[i] < 137.5){
+   score <- score + 2
+  } else if(cohort_data_complete$SODIUM[i] >= 137.5 ){
+   score <- score + 0
+  }
+  #creatinine 
+  if (cohort_data_complete$CREATININE[i] < 0.5){
+    score <- score + 0
+  } else if (cohort_data_complete$CREATININE[i] < 1.5){
+    score <- score + 5
+  } else if (cohort_data_complete$CREATININE[i] < 2.5){
+    score <- score + 9
+  } else if (cohort_data_complete$CREATININE[i] < 3.5){
+    score <- score + 14
+  } else if (cohort_data_complete$CREATININE[i] >= 3.5){
+    score <- score + 19
+  }
+  
+  # history of liver disease 
+  if(cohort_data_complete$LIVER[i] == 1){
+    score <- score + 8
+  }
+  
+  #history of reactive airway disease 
+  if( cohort_data_complete$REAC_AIR[i] == 1){
+    score <- score + 4
+  }
+  #history of depression
+  if( cohort_data_complete$DEPRESSION[i] == 1){
+    score <- score + 4
+  }
+  
+  cohort_data_complete$OPTIMIZE[i] <- score
+}
+```
+
+
+```{r message=F, warning=F}
+# Avg 30 day mortaility per quantiles
+
+# make quantiles
+cohort_data_complete$quantiles <- quantcut(cohort_data_complete$EFFECT, q = seq(0, 1, by=.2), na.rm=T)
+# get everyone who died within 30 days
+cohort_30_days <- cohort_data_complete[cohort_data_complete$DOD_30days==1,]
+
+# get average mortality per quantile
+quantiles_30_day <- aggregate.data.frame(cohort_30_days$DISCHtoDOD, by=list(quantiles=cohort_30_days$quantiles), FUN=mean)
+
+cohort_data_complete <- cohort_data_complete[cohort_data_complete$DISCHtoDOD > 0, ]
+
+# graph it
+fig <- ggplot(data=quantiles_30_day, aes(x=quantiles, y=x, group=1)) +
+  geom_line() + geom_point() +
+  labs(y = "Average number of days lived past discharge", x = "Risk Score Quantiles") +
+  ggtitle("Average number of days past discharge per quantile")
+fig
+```
+
+##IMPUTATION
+```{r message=F, warning=F}
+library(Amelia)
+sim_data.df <- read.csv(file='DATA_MASTER.csv', header=TRUE)
+dim(sim_data.df)
+amelia.out <- amelia(sim_data.df, m = 5)
+amelia.out
+amelia.imputed.5 <- amelia.out$imputations[[5]]
+
+
+imputed_scores <- read.csv(file='DATA_IMPUTE_EFFECT_OPTIME_OPTIMIZE.csv', header=TRUE)
+normal_scores <- read.csv(file='DATA_effect_optime_optimize.csv', header=TRUE)
+
+```
+
