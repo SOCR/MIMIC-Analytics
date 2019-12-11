@@ -34,7 +34,7 @@ library("lubridate")
 
 library(survival)
 
-project = 'mimic-iii-244018'
+project = 'socr-mdp-mimic-analytics'
 ```
 
 # Introduction
@@ -1313,4 +1313,137 @@ Predicting mortality in patients with acute heart failure: Role of risk scores.
 World Journal of Cardiology. 7. 902. 10.4330/wjc.v7.i12.902. 
 
 MDCalc.com, Mean Arterial Pressure MAP, accessed 2019, https://www.mdcalc.com/mean-arterial-pressure-map#evidence
+
+# ESCAPE Scoring System
+
+The ESCAPE ([O’connor 2010](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3835158/)) scoring system aims to predict 6-month mortality rates among patients with heart failure risk. In order to apply the ESCAPE scoring system on the MIMIC-III dataset, we retrieved the cohort patients’ age, blood urea nitrogen level, sodium level, diuretic dose, brain natriuretic peptide level at discharge, along with whether they received CPR/mechanical ventilation and whether they received beta-blockers at discharge.
+
+## Data extraction
+
+The `itemid`s of a category are extracted from the `d_items` and and `d_labitems` tables by searching searching for a keyword.
+
+```{r message=F, warning=F}
+
+get_itemids = function(label) {
+  label = tolower(label)
+  sql = paste0('SELECT * FROM [physionet-data.mimiciii_clinical.d_items] WHERE LOWER(label) LIKE "%',label, '%"')
+  data = query_exec(sql, project=project)
+  itemids = data$ITEMID
+  
+  sql = paste0('SELECT * FROM [physionet-data.mimiciii_clinical.d_labitems] WHERE LOWER(label) LIKE "%',label, '%"')
+  data = query_exec(sql, project=project)
+  itemids = c(itemids, data$ITEMID)
+  
+  return(itemids)
+}
+
+get_values_from_ids = function(itemids, hadm_id=c(), table) {
+  if (length(itemids) == 0) {
+    return(list())
+  }
+  sql = sprintf('SELECT * FROM [physionet-data.mimiciii_clinical.%s] WHERE itemid IN (%s) AND hadm_id IN (%s)', 
+                table,
+                paste0(itemids, collapse = ", "), 
+                paste(hadm_id, collapse=", "))
+  data = query_exec(sql, project=project, max_pages=1)
+
+  data
+}
+
+get_values = function(label, table='chartevents', col_name = label, orig_col = "VALUE") {
+  return(get_values_from_ids(get_itemids(label), cohort$HADM_ID, table) %>% select(HADM_ID, !!orig_col) %>% rename(!!col_name := !!orig_col)) %>% distinct(HADM_ID, .keep_all = TRUE)
+}
+```
+
+### BNP
+
+```{r}
+bnp = get_values("BNP", 'labevents', "BNP", "VALUE")
+bnp$BNP[bnp$BNP == "GREATER THAN 70000"] = 70000
+bnp$BNP[bnp$BNP == "GREATER THAN 70,000"] = 70000
+bnp$BNP[bnp$BNP == ">70000"] = 70000
+bnp$BNP[bnp$BNP == "DONE"] = 70000
+bnp$BNP = as.numeric(bnp$BNP)
+```
+
+### Diuretics
+
+```{r}
+diuretic = get_values("lasix", "inputevents_mv", "DIURETIC", orig_col = "AMOUNT")
+```
+
+### Beta-blockers
+
+```{r}
+blocker = get_values("lol", "inputevents_mv", "BETABLOCKERS", "AMOUNT")
+```
+
+### CPR/Mechanical ventilation
+
+```{r}
+cpr_codes = c(9960, 9390, 967, 9670, 9671, 9672)
+sql = sprintf('SELECT * FROM [physionet-data.mimiciii_clinical.procedures_icd] 
+              WHERE icd9_code IN (%s) AND hadm_id IN (%s)', 
+              paste0(cpr_codes, collapse = ", "), 
+              paste0(cohort$HADM_ID, collapse=", "))
+cpr = query_exec(sql, project=project, max_pages=1) %>% distinct(HADM_ID)
+cpr$CPR = TRUE
+# print(kable(data) %>% kable_styling(bootstrap_options = 'striped'))
+```
+```{r}
+bun_sodium = read.csv('data/DATA_MASTER.csv') %>% select(HADM_ID, BUN, SODIUM)
+```
+
+## Join all the separate data columns together
+The N/A values in the CPR column is imputed to `FALSE`, while the DIURETIC and BETABLOCKERS columns are imputed to 0. The BNP and BUN columns are imputed to the mean of the present data in the columns.
+
+```{r}
+joined = left_join(cohort, bnp) %>% left_join(diuretic) %>% left_join(blocker) %>% left_join(cpr) %>% left_join(bun_sodium)
+joined$DIURETIC[is.na(joined$DIURETIC)] = 0
+joined$BETABLOCKERS[is.na(joined$BETABLOCKERS)] = 0
+joined$CPR[is.na(joined$CPR)] = FALSE
+joined$BNP[is.na(joined$BNP)] = mean(bnp$BNP, na.rm = TRUE)
+joined$BUN[is.na(joined$BUN)] = mean(bun_sodium$BUN, na.rm = TRUE)
+joined$SODIUM[is.na(joined$SODIUM)] = mean(bun_sodium$SODIUM, na.rm = TRUE)
+```
+
+## ESCAPE score calculation
+
+```{r}
+joined$ESCAPE_SCORE = 0
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$AGE > 70)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BUN > 40)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BUN > 90)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$SODIUM < 130)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$CPR) * 2
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$DIURETIC > 240)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BETABLOCKERS < 0.0001)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BNP > 500)
+joined$ESCAPE_SCORE = joined$ESCAPE_SCORE + as.numeric(joined$BNP > 1300) * 3
+```
+
+Below is a histogram of the computed ESCAPE scores
+
+```{r}
+ggplot(data=joined, aes(ESCAPE_SCORE)) + geom_bar() + scale_x_continuous(breaks=seq(0, 10, 1))
+```
+
+## Survival Analysis
+
+```{r}
+death_data <- cohort
+newdata <- death_data[c(1,13)]
+ESCAPE_data <- merge(joined, newdata, by="X")
+
+# Determine the mortality status first
+# status 0 = alive, 1 = dead
+ESCAPE_data$status <- rep(x=0, times = nrow(ESCAPE_data))
+ESCAPE_data$status <- ifelse(is.na(ESCAPE_data$DOD),yes=ESCAPE_data$status, no=ESCAPE_data$status+1)
+survival_fit <- survfit(Surv(ESCAPE_SCORE,status)~1, data=ESCAPE_data)
+plot(survival_fit, xlab="ESCAPE score", ylab="Survival Probability")
+
+summary(survival_fit)
+```
+
+
 
